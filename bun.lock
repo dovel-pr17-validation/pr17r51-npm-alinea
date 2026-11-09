@@ -6,13 +6,13 @@
       "name": "alinea",
       "dependencies": {
         "@alinea/iso": "^0.3.3",
-        "@alinea/sqlite-wasm": "0.8.1",
+        "@alinea/sqlite-wasm": "0.8.2",
         "esbuild": "^0.28.0",
       },
       "devDependencies": {
         "@alinea/styler": "^1.0.3",
         "@alinea/suite": "^0.6.3",
-        "@badgateway/oauth2-client": "^3.2.0",
+        "@badgateway/oauth2-client": "^3.3.1",
         "@esbx/reporter": "^0.0.20",
         "@esbx/workspaces": "^0.0.20",
         "@floating-ui/dom": "^1.8.0",
@@ -172,7 +172,7 @@
 
     "@alinea/iso": ["@alinea/iso@0.3.3", "", {}, "sha512-ftRGW2+sM/9SBbn3zF6hXICNluEInaAMw49IHGKCUBkrsn0SN8mG/+bK1iz9+ibE1Dto736KwDfr3lcBVN5t8g=="],
 
-    "@alinea/sqlite-wasm": ["@alinea/sqlite-wasm@0.8.1", "", {}, "sha512-WRuVhgeIXo96MwktKHCoR5BZmAL+ngvBhg+1wUIRQ1Ctba4pgvRAxqUU4Ae9eQXBuGW/5EwvshkiGQPtE0uoSg=="],
+    "@alinea/sqlite-wasm": ["@alinea/sqlite-wasm@0.8.2", "", {}, "sha512-qqk8Cz6Y8bxm86zR90om274o9GzqH3JutVNW9fGiHg5ZDG5A+7oNQr8d9YRR21TnvYxBOGdDrFz8t4eiiZ6Gsg=="],
 
     "@alinea/styler": ["@alinea/styler@1.0.3", "", {}, "sha512-u248xCGPYuGAsC2Z83Jyxplcc92Ai1IdeoZiBmr9HY/yGRSLZAxteStg4ErLOi8BnQQ9g72oEbgK3GJ7wU71zA=="],
 
