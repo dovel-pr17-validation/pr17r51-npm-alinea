@@ -1,0 +1,1080 @@
+import {
+  createDashboardAtomFixture,
+  createDashboardStore
+} from '#test/DashboardFixture.js'
+import {LocalDB} from '#/database/LocalDB.js'
+import {Permission, Policy, WriteablePolicy} from '#/core/Role.js'
+import {getScope} from '#/core/Scope.js'
+import {localUser} from '#/core/User.js'
+import {Entry} from '#/core/Entry.js'
+import {Config, Field} from '#/index.js'
+import {expect, test} from 'bun:test'
+import type {DropTarget, Key} from '#/components.js'
+import {atom, createStore} from 'jotai'
+import {LucideFile} from '../icons.js'
+import {workspacesAtom} from './config.js'
+import {
+  moveConfirmationAtom,
+  type MoveConfirmation
+} from './moveConfirmation.js'
+import {routeAtom} from './nav.js'
+import {rootAtoms} from './root.js'
+import {MediaFile} from '#/core/media/MediaTypes.js'
+import {
+  createExplorerAtoms,
+  ExplorerEntry,
+  explorerItemCanDelete,
+  explorerItemCanMove,
+  explorerThumbnailId,
+  type ExplorerItemData,
+  searchResultLimit
+} from './explorer.js'
+import {syncAtom} from './graph.js'
+import {preloadUserPolicyAtom, userPolicyReadyAtom} from './user.js'
+import {columnLinkIds, resolveOverview} from './overview.js'
+import {getRoot} from '#/core/Internal.js'
+
+function folderEntry(value: ExplorerItemData) {
+  const item = atom(value)
+  const root = atom({icon: atom(LucideFile), label: atom('Pages')})
+  return new ExplorerEntry(value.id, value, item, root)
+}
+
+test('picker rows select instead of navigating the dashboard', () => {
+  const explorer = createExplorerAtoms(
+    {workspace: 'workspace', root: 'pages'},
+    {enableNavigation: true, onConfirm() {}}
+  )
+  const folder = folderEntry({
+    id: 'folder',
+    title: 'Folder',
+    path: 'folder',
+    type: 'Folder',
+    workspace: 'workspace',
+    root: 'pages',
+    locale: null,
+    parentId: null,
+    parents: [],
+    index: 'a0',
+    data: {},
+    hasChildren: true
+  })
+  const store = createStore()
+
+  expect(explorer.hasRowAction).toBe(false)
+  store.set(explorer.onAction, folder, null)
+  expect(store.get(explorer.location).parentId).toBe('folder')
+})
+
+test('picker confirmation can use the rendered locale while another loads', () => {
+  let confirmed: {selection: Array<string>; locale: string | null} | undefined
+  const explorer = createExplorerAtoms(
+    {workspace: 'workspace', root: 'pages', locale: 'fr'},
+    {
+      onConfirm(selection, locale) {
+        confirmed = {selection, locale}
+      }
+    }
+  )
+  const store = createStore()
+
+  store.set(explorer.selection, new Set(['entry-1']))
+  store.set(explorer.selectedLocale, 'de')
+  store.set(explorer.onConfirm, 'fr')
+
+  expect(confirmed).toEqual({selection: ['entry-1'], locale: 'fr'})
+
+  store.set(explorer.onConfirm, null)
+  expect(confirmed).toEqual({selection: ['entry-1'], locale: null})
+})
+
+test('page explorers browse into media folders instead of editing them', () => {
+  const explorer = createExplorerAtoms(
+    {workspace: 'workspace', root: 'media'},
+    {enableNavigation: true}
+  )
+  const folder = folderEntry({
+    id: 'images',
+    title: 'Images',
+    path: 'images',
+    type: 'MediaLibrary',
+    workspace: 'workspace',
+    root: 'media',
+    locale: null,
+    parentId: null,
+    parents: [],
+    index: 'a0',
+    data: {},
+    hasChildren: true
+  })
+  const store = createStore()
+
+  store.set(explorer.onAction, folder, null)
+
+  expect(store.get(explorer.location).parentId).toBe('images')
+})
+
+test('uses the locale from its initial location', () => {
+  const explorer = createExplorerAtoms(
+    {workspace: 'workspace', root: 'pages', locale: 'fr'},
+    {selectedLocale: 'en'}
+  )
+  const store = createStore()
+
+  expect(store.get(explorer.selectedLocale)).toBe('fr')
+})
+
+test('workspace search includes all locales and unlocalized roots', async () => {
+  const Page = Config.document('Page', {
+    fields: {title: Field.text('Title')}
+  })
+  const config = Config.create({
+    schema: {Page},
+    workspaces: {
+      main: Config.workspace('Main', {
+        source: '.',
+        roots: {
+          pages: Config.root('Pages', {
+            contains: ['Page'],
+            i18n: {locales: ['en', 'fr']}
+          }),
+          media: Config.root('Media', {contains: ['Page']})
+        }
+      })
+    }
+  })
+  const db = new LocalDB(config)
+  await db.create({
+    type: Page,
+    root: 'pages',
+    locale: 'en',
+    set: {title: 'Shared result'}
+  })
+  await db.create({
+    type: Page,
+    root: 'pages',
+    locale: 'fr',
+    set: {title: 'Shared result'}
+  })
+  await db.create({
+    type: Page,
+    root: 'media',
+    set: {title: 'Shared result'}
+  })
+  const store = createDashboardStore(config, db)
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms(
+    {workspace: 'main', root: 'pages', locale: 'en'},
+    {allowAllWorkspaces: true, mode: 'search'}
+  )
+  store.set(explorer.search, 'Shared result')
+
+  const items = await store.get(explorer.itemsReady('en'))
+
+  expect(items).toHaveLength(3)
+  expect(items.map(item => [item.root, item.locale])).toEqual(
+    expect.arrayContaining([
+      ['pages', 'en'],
+      ['pages', 'fr'],
+      ['media', null]
+    ])
+  )
+})
+
+test('searching all locations of a limited picker stays within them', async () => {
+  const Page = Config.document('Page', {
+    fields: {title: Field.text('Title')}
+  })
+  const config = Config.create({
+    schema: {Page},
+    workspaces: {
+      main: Config.workspace('Main', {
+        source: 'main',
+        roots: {
+          pages: Config.root('Pages', {contains: ['Page']}),
+          news: Config.root('News', {contains: ['Page']}),
+          tags: Config.root('Tags', {contains: ['Page']})
+        }
+      }),
+      other: Config.workspace('Other', {
+        source: 'other',
+        roots: {pages: Config.root('Pages', {contains: ['Page']})}
+      })
+    }
+  })
+  const db = new LocalDB(config)
+  for (const [workspace, root] of [
+    ['main', 'pages'],
+    ['main', 'news'],
+    ['main', 'tags'],
+    ['other', 'pages']
+  ])
+    await db.create({type: Page, workspace, root, set: {title: 'Shared'}})
+  const store = createDashboardStore(config, db)
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms(
+    {workspace: 'main', root: 'pages'},
+    {
+      allowAllWorkspaces: true,
+      limitLocations: [
+        {workspace: 'main', root: 'pages'},
+        {workspace: 'main', root: 'news'},
+        {workspace: 'other', root: 'pages'}
+      ]
+    }
+  )
+  store.set(explorer.search, 'Shared')
+  store.set(explorer.searchScope, 'everything')
+
+  expect(store.get(explorer.searchesEverything)).toBe(true)
+  const items = await store.get(explorer.itemsReady(null))
+  expect(items.map(item => [item.workspace, item.root]).sort()).toEqual([
+    ['main', 'news'],
+    ['main', 'pages'],
+    ['other', 'pages']
+  ])
+
+  store.set(explorer.searchScope, 'workspace')
+  expect(store.get(explorer.scope)).toBe('workspace')
+  const roots = await store.get(explorer.itemsReady(null))
+  expect(roots.map(item => [item.workspace, item.root]).sort()).toEqual([
+    ['main', 'news'],
+    ['main', 'pages']
+  ])
+
+  // Wider scopes list matches, browsing stays within the root
+  store.set(explorer.search, '')
+  expect(store.get(explorer.scope)).toBe('root')
+})
+
+test('ready pages snapshot the search that produced their items', async () => {
+  const {store} = await createDashboardAtomFixture()
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms(
+    {workspace: 'main', root: 'pages'},
+    {mode: 'search'}
+  )
+
+  const idlePage = await store.get(explorer.pageReady)
+  expect(idlePage.search).toBe('')
+  expect(idlePage.items).toEqual([])
+
+  store.set(explorer.search, 'Parent')
+
+  const searchPage = await store.get(explorer.pageReady)
+  expect(searchPage.search).toBe('Parent')
+  expect(searchPage.items.map(item => item.title)).toContain('Parent draft')
+})
+
+test('ready pages include inherited upload permissions for the current folder', async () => {
+  const {child, config, parent, store} = await createDashboardAtomFixture()
+  await store.get(userPolicyReadyAtom)
+  const policy = new WriteablePolicy(getScope(config))
+    .allowAll()
+    .set({id: parent._id, deny: {upload: true}})
+  store.set(preloadUserPolicyAtom, localUser, policy)
+  store.set(routeAtom, {
+    browser: true,
+    route: {
+      page: 'entry',
+      workspace: 'main',
+      root: 'pages',
+      entry: child._id
+    }
+  })
+  const explorer = rootAtoms('main', 'pages').children(child._id)
+
+  const page = await store.get(explorer.pageReady)
+
+  expect(page.canUpload).toBe(false)
+})
+
+test('ready pages describe the listed parent and its parents', async () => {
+  const {child, parent, store} = await createDashboardAtomFixture()
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms({workspace: 'main', root: 'pages'}, {})
+
+  expect((await store.get(explorer.pageReady)).parent).toBeUndefined()
+
+  // No tree lists the nested location, the page loads it with its parents
+  store.set(explorer.location, current => ({...current, parentId: child._id}))
+  const page = await store.get(explorer.pageReady)
+
+  expect(page.parent).toEqual({
+    id: child._id,
+    title: 'Child',
+    type: child._type,
+    parents: [parent._id],
+    path: [{id: parent._id, title: 'Parent draft'}]
+  })
+})
+
+test('search temporarily overrides the preferred result mode', () => {
+  const explorer = createExplorerAtoms(
+    {workspace: 'workspace', root: 'pages'},
+    {condition: {_type: 'Page'}}
+  )
+  const store = createStore()
+
+  store.set(explorer.resultMode, 'browse')
+  expect(store.get(explorer.resultMode)).toBe('browse')
+  store.set(explorer.search, 'Alpha')
+  expect(store.get(explorer.resultMode)).toBe('matches')
+  store.set(explorer.search, '')
+  expect(store.get(explorer.resultMode)).toBe('browse')
+
+  store.set(explorer.resultMode, 'matches')
+  store.set(explorer.search, 'Alpha')
+  expect(store.get(explorer.resultMode)).toBe('matches')
+  store.set(explorer.search, '')
+  expect(store.get(explorer.resultMode)).toBe('matches')
+})
+
+test('limits the picker to its allowed locations', () => {
+  const explorer = createExplorerAtoms(
+    {workspace: 'outside', root: 'outside'},
+    {
+      limitLocations: [
+        {workspace: 'main', root: 'pages'},
+        {workspace: 'main', root: 'media'}
+      ]
+    }
+  )
+  const store = createStore()
+
+  expect(store.get(explorer.location)).toEqual({
+    workspace: 'main',
+    root: 'pages'
+  })
+
+  store.set(explorer.location, {workspace: 'main', root: 'media'})
+  expect(store.get(explorer.location)).toEqual({
+    workspace: 'main',
+    root: 'media'
+  })
+
+  store.set(explorer.location, {workspace: 'outside', root: 'outside'})
+  expect(store.get(explorer.location)).toEqual({
+    workspace: 'main',
+    root: 'pages'
+  })
+})
+
+test('preloading items primes the synchronous items atom', async () => {
+  const {store} = await createDashboardAtomFixture()
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms({workspace: 'main', root: 'pages'}, {})
+
+  const readyItems = await store.get(explorer.itemsReady(null))
+
+  expect(readyItems).not.toBeEmpty()
+  expect(store.get(explorer.items(null))).toEqual(readyItems)
+})
+
+test('preloading items includes expanded inline children', async () => {
+  const {store, parent} = await createDashboardAtomFixture()
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms(
+    {workspace: 'main', root: 'pages'},
+    {nestedNavigation: true}
+  )
+  store.set(explorer.expandedKeys, new Set([parent._id]))
+
+  const items = await store.get(explorer.itemsReady(null))
+  const parentEntry = items.find(entry => entry.id === parent._id)
+
+  expect(parentEntry).toBeDefined()
+  expect(store.get(explorer.children(parentEntry!, null))).not.toBeEmpty()
+})
+
+test('matches only contain selectable rows for compound conditions', async () => {
+  const {store, child} = await createDashboardAtomFixture()
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms(
+    {workspace: 'main', root: 'pages'},
+    {
+      condition: {_type: 'Page', _status: 'published'},
+      initialResultMode: 'matches'
+    }
+  )
+
+  const items = await store.get(explorer.itemsReady(null))
+
+  expect(items.map(item => item.id)).toEqual([child._id])
+  expect(items.every(item => store.get(explorer.isSelectable(item)))).toBe(true)
+})
+
+test('canSelect limits which listed entries can be selected', async () => {
+  const {store, child, parent} = await createDashboardAtomFixture()
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms(
+    {workspace: 'main', root: 'pages', parentId: parent._id},
+    {canSelect: item => item.id !== child._id}
+  )
+
+  const items = await store.get(explorer.itemsReady(null))
+  const listed = items.find(item => item.id === child._id)
+
+  expect(listed).toBeDefined()
+  expect(store.get(explorer.isSelectable(listed!))).toBe(false)
+})
+
+test('card browse queries show direct children without applying conditions', async () => {
+  const {store, child, parent} = await createDashboardAtomFixture()
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms(
+    {workspace: 'main', root: 'pages'},
+    {
+      condition: {_id: child._id},
+      initialResultMode: 'browse',
+      initialView: 'card'
+    }
+  )
+
+  const rootItems = await store.get(explorer.itemsReady(null))
+
+  expect(rootItems.map(item => item.id)).toEqual([parent._id])
+
+  store.set(explorer.location, current => ({
+    ...current,
+    parentId: parent._id
+  }))
+  const childItems = await store.get(explorer.itemsReady(null))
+
+  expect(childItems.map(item => item.id)).toEqual([child._id])
+})
+
+test('filtered card queries stay scoped to the selected location', async () => {
+  const {store, child, parent} = await createDashboardAtomFixture()
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms(
+    {workspace: 'main', root: 'pages'},
+    {
+      condition: {_type: 'Page'},
+      initialResultMode: 'matches',
+      initialView: 'card'
+    }
+  )
+
+  store.set(explorer.location, current => ({
+    ...current,
+    parentId: parent._id
+  }))
+  const items = await store.get(explorer.itemsReady(null))
+
+  expect(items.map(item => item.id)).toEqual([child._id])
+})
+
+test('matches cover the whole root when searching all depths', async () => {
+  const {store, child, parent} = await createDashboardAtomFixture()
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms(
+    {workspace: 'main', root: 'pages', parentId: child._id},
+    {
+      condition: {_type: 'Page'},
+      initialResultMode: 'matches',
+      searchDepth: 'all'
+    }
+  )
+
+  const items = await store.get(explorer.itemsReady(null))
+
+  expect(items.map(item => item.id).sort()).toEqual(
+    [parent._id, child._id].sort()
+  )
+})
+
+test('pickers preselect initial links unless asked to only mark them', () => {
+  const picker = (preselect?: boolean) =>
+    createExplorerAtoms(
+      {workspace: 'workspace', root: 'pages'},
+      {
+        initialSelection: ['linked-entry'],
+        onConfirm() {},
+        preselect,
+        selectionMode: 'multiple'
+      }
+    )
+  const store = createStore()
+  const marking = picker(false)
+
+  expect(store.get(picker().selection)).toEqual(new Set(['linked-entry']))
+  expect(store.get(marking.selection)).toEqual(new Set())
+  expect(marking.linkedKeys).toEqual(new Set(['linked-entry']))
+})
+
+test('the thumbnail is the first image in field order, including lists', () => {
+  const Block = Config.type('Block', {
+    fields: {photo: Field.image('Photo')}
+  })
+  const Product = Config.document('Product', {
+    fields: {
+      title: Field.text('Title'),
+      related: Field.entry('Related'),
+      gallery: Field.image.multiple('Gallery'),
+      blocks: Field.list('Blocks', {schema: {Block}}),
+      cover: Field.image('Cover')
+    }
+  })
+  const image = (id: string, entry: string) => ({
+    _id: id,
+    _index: 'a0',
+    _type: 'image',
+    _entry: entry
+  })
+  expect(
+    explorerThumbnailId(Product, {
+      related: {_id: 'r', _type: 'entry', _entry: 'page'},
+      gallery: [image('g1', 'first'), image('g2', 'second')],
+      cover: image('c', 'cover')
+    })
+  ).toBe('first')
+  expect(
+    explorerThumbnailId(Product, {
+      gallery: [],
+      blocks: [
+        {_id: 'b', _index: 'a0', _type: 'Block', photo: image('p', 'block')}
+      ],
+      cover: image('c', 'cover')
+    })
+  ).toBe('block')
+  expect(explorerThumbnailId(Product, {title: 'No images'})).toBeUndefined()
+})
+
+test('overview link ids only come from overview columns', () => {
+  const Page = Config.document('Page', {
+    fields: {
+      title: Field.text('Title'),
+      author: Field.entry('Author', {overview: true}),
+      cover: Field.image('Cover')
+    }
+  })
+  const config = Config.create({
+    schema: {Page},
+    workspaces: {
+      main: Config.workspace('Main', {
+        source: 'content',
+        roots: {pages: Config.root('Pages', {contains: ['Page']})}
+      })
+    }
+  })
+  const overview = resolveOverview(config, {
+    kind: 'root',
+    data: getRoot(config.workspaces.main.pages)
+  })
+  expect(
+    columnLinkIds(config, overview, {
+      id: 'page',
+      type: 'Page',
+      title: 'Page',
+      path: 'page',
+      locale: null,
+      workspace: 'main',
+      root: 'pages',
+      parentId: null,
+      data: {
+        author: {_id: 'a', _type: 'entry', _entry: 'author-1'},
+        cover: {_id: 'c', _type: 'image', _entry: 'image-1'}
+      }
+    })
+  ).toEqual(['author-1'])
+})
+
+test('search results load thumbnails and linked entry titles', async () => {
+  const Author = Config.document('Author', {
+    fields: {title: Field.text('Title')}
+  })
+  const Product = Config.document('Product', {
+    fields: {
+      title: Field.text('Title'),
+      author: Field.entry('Author', {overview: true}),
+      gallery: Field.image.multiple('Gallery')
+    }
+  })
+  const config = Config.create({
+    schema: {Author, Product},
+    workspaces: {
+      main: Config.workspace('Main', {
+        source: 'content',
+        roots: {
+          pages: Config.root('Pages', {contains: [Author, Product]}),
+          media: Config.media()
+        }
+      })
+    }
+  })
+  const db = new LocalDB(config)
+  await db.sync()
+  await db.create({
+    id: 'photo',
+    type: MediaFile,
+    root: 'media',
+    set: {
+      title: 'Photo',
+      path: 'photo',
+      location: 'photo.jpg',
+      extension: '.jpg',
+      preview: 'data:image/webp;base64,preview',
+      averageColor: '#524537'
+    }
+  })
+  await db.create({
+    id: 'author',
+    type: Author,
+    root: 'pages',
+    set: {title: 'Maya'}
+  })
+  await db.create({
+    id: 'table',
+    type: Product,
+    root: 'pages',
+    set: {
+      title: 'Dining table',
+      author: {_id: 'l1', _type: 'entry', _entry: 'author'},
+      gallery: [{_id: 'g1', _index: 'a0', _type: 'image', _entry: 'photo'}]
+    }
+  })
+  const store = createDashboardStore(config, db)
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms(
+    {workspace: 'main', root: 'pages'},
+    {mode: 'search'}
+  )
+  store.set(explorer.search, 'Dining')
+
+  const [item] = await store.get(explorer.itemsReady(null))
+  const {data} = store.get(item.data)
+
+  expect(store.get(data.thumbnail)).toEqual({
+    id: 'photo',
+    title: 'Photo',
+    preview: 'data:image/webp;base64,preview',
+    averageColor: '#524537'
+  })
+  expect(store.get(data.linked).get('author')?.title).toBe('Maya')
+})
+
+const Folder = Config.document('Folder', {
+  contains: ['Folder', 'Note'],
+  fields: {}
+})
+const Note = Config.document('Note', {fields: {}})
+const notesConfig = Config.create({
+  schema: {Folder, Note},
+  workspaces: {
+    main: Config.workspace('Main', {
+      source: '.',
+      roots: {notes: Config.root('Notes', {contains: ['Folder', 'Note']})}
+    })
+  }
+})
+
+async function notesFixture() {
+  const db = new LocalDB(notesConfig)
+  await db.sync()
+  const create = (title: string, type = Note, parentId?: string) =>
+    db.create({type, parentId, set: {title}})
+  const [a, b, c, folder] = [
+    await create('A'),
+    await create('B'),
+    await create('C'),
+    await create('Folder', Folder)
+  ]
+  const nested = await create('Nested', Note, folder._id)
+  const store = createDashboardStore(notesConfig, db)
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms(
+    {workspace: 'main', root: 'notes'},
+    {enableNavigation: true}
+  )
+  const titles = async () => {
+    await store.set(syncAtom)
+    return (await store.get(explorer.itemsReady(null))).map(item => item.title)
+  }
+  return {a, b, c, db, explorer, folder, nested, store, titles}
+}
+
+test('reordered entries keep the order they are listed in', async () => {
+  const {a, b, c, explorer, folder, store, titles} = await notesFixture()
+  expect(await titles()).toEqual(['A', 'B', 'C', 'Folder'])
+  await store.set(
+    explorer.reorder,
+    [a._id, c._id],
+    {key: folder._id, position: 'after'},
+    null
+  )
+  expect(await titles()).toEqual(['B', 'Folder', 'A', 'C'])
+  // Selected in reverse order
+  await store.set(
+    explorer.reorder,
+    [c._id, a._id],
+    {key: b._id, position: 'before'},
+    null
+  )
+  expect(await titles()).toEqual(['A', 'C', 'B', 'Folder'])
+})
+
+test('entries moved in the sidebar tree keep the order they are listed in', async () => {
+  const {a, b, c, folder, store, titles} = await notesFixture()
+  const root = rootAtoms('main', 'notes')
+  const tree = root.tree(null)
+  const move = async (keys: Array<string>, target: DropTarget) => {
+    await store.get(tree.ready)
+    await store.set(root.onMove, {keys: new Set(keys), target}, tree)
+  }
+  await move([a._id, c._id], {key: folder._id, position: 'after'})
+  expect(await titles()).toEqual(['B', 'Folder', 'A', 'C'])
+  // Selected in reverse order
+  await move([c._id, a._id], {key: b._id, position: 'before'})
+  expect(await titles()).toEqual(['A', 'C', 'B', 'Folder'])
+})
+
+test('entries can be moved into listed containers by id', async () => {
+  const {a, db, explorer, folder, nested, store} = await notesFixture()
+  await store.get(explorer.itemsReady(null))
+  const types = new Set(['application/x-alinea-entry-id'])
+  const canDrop = (key: string) =>
+    store.set(explorer.canDrop, {key, position: 'on'}, types, null)
+  expect(canDrop(folder._id)).toBe(true)
+  // Notes hold no children
+  expect(canDrop(a._id)).toBe(false)
+  // The nested note is not listed but can still be moved
+  const moving = store.set(explorer.moveInto, [nested._id, a._id], {
+    key: folder._id,
+    position: 'on'
+  })
+  await answerMove(store, true)
+  await moving
+  const moved = await db.find({
+    id: {in: [nested._id, a._id]},
+    select: Entry.parentId
+  })
+  expect(moved).toEqual([folder._id, folder._id])
+})
+
+test('moving entries under another parent can be cancelled', async () => {
+  const {a, db, explorer, folder, store} = await notesFixture()
+  await store.get(explorer.itemsReady(null))
+  const moving = store.set(explorer.moveInto, [a._id], {
+    key: folder._id,
+    position: 'on'
+  })
+  const confirmation = await answerMove(store, false)
+  await moving
+  expect(confirmation.pages.map(page => page.id)).toEqual([a._id])
+  expect(await db.first({id: a._id, select: Entry.parentId})).toBe(a._parentId)
+})
+
+test('entries are not moved where their type is not allowed', async () => {
+  const {a, b, db, explorer, store} = await notesFixture()
+  await store.get(explorer.itemsReady(null))
+  const moving = store.set(explorer.moveInto, [b._id], {
+    key: a._id,
+    position: 'on'
+  })
+  const confirmation = await answerMove(store, false)
+  await moving
+  expect(confirmation.refusal).toBe('"A" can\'t hold Note.')
+  expect(await db.first({id: b._id, select: Entry.parentId})).toBeNull()
+})
+
+/** Answers the question a move under another parent asks */
+async function answerMove(
+  store: ReturnType<typeof createStore>,
+  confirmed: boolean
+): Promise<MoveConfirmation> {
+  const confirmation =
+    store.get(moveConfirmationAtom) ??
+    (await new Promise<MoveConfirmation>(resolve => {
+      const unsubscribe = store.sub(moveConfirmationAtom, () => {
+        const next = store.get(moveConfirmationAtom)
+        if (!next) return
+        unsubscribe()
+        resolve(next)
+      })
+    }))
+  confirmation.resolve(confirmed)
+  return confirmation
+}
+
+test('selection actions follow the selected listed entries', async () => {
+  const {parent, store} = await createDashboardAtomFixture()
+  store.set(preloadUserPolicyAtom, localUser, Policy.ALLOW_ALL)
+  await store.get(userPolicyReadyAtom)
+  const explorer = rootAtoms('main', 'pages').explorer
+  await store.get(explorer.pageReady)
+  store.sub(explorer.page, () => {})
+  await store.get(explorer.pageReady)
+
+  expect(store.get(explorer.selectionActions).items).toEqual([])
+  store.set(explorer.selection, new Set([parent._id, 'not-listed']))
+  const actions = store.get(explorer.selectionActions)
+  expect(actions.items.map(item => item.id)).toEqual([parent._id])
+  expect(actions.canMove).toBe(true)
+  expect(actions.canDelete).toBe(true)
+
+  store.set(explorer.clearSelection)
+  expect(store.get(explorer.selectionActions).items).toEqual([])
+})
+
+test('selection actions include selected children listed inline', async () => {
+  const {child, parent, store} = await createDashboardAtomFixture()
+  store.set(preloadUserPolicyAtom, localUser, Policy.ALLOW_ALL)
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms(
+    {workspace: 'main', root: 'pages'},
+    {nestedNavigation: true}
+  )
+  store.set(explorer.expandedKeys, new Set([parent._id]))
+  await store.get(explorer.pageReady)
+  store.sub(explorer.page, () => {})
+  await store.get(explorer.pageReady)
+
+  store.set(explorer.selection, new Set([child._id]))
+  const actions = store.get(explorer.selectionActions)
+  expect(actions.items.map(item => item.id)).toEqual([child._id])
+})
+
+test('entries that are not seeded can be deleted and moved', () => {
+  const config = Config.create({
+    schema: {},
+    workspaces: {
+      main: Config.workspace('Main', {
+        source: '.',
+        roots: {pages: Config.root('Pages'), media: Config.media()}
+      })
+    }
+  })
+  const item: ExplorerItemData = {
+    id: 'file',
+    title: 'File',
+    path: 'file',
+    type: 'MediaFile',
+    workspace: 'main',
+    root: 'media',
+    locale: null,
+    parentId: null,
+    parents: [],
+    index: 'a0',
+    data: {},
+    hasChildren: false,
+    status: 'published',
+    seeded: null
+  }
+  const policy = Policy.ALLOW_ALL
+  expect(explorerItemCanDelete(policy, item)).toBe(true)
+  expect(explorerItemCanMove(policy, item)).toBe(true)
+  const seeded = {...item, seeded: 'media/file.json'}
+  expect(explorerItemCanDelete(policy, seeded)).toBe(false)
+  expect(explorerItemCanMove(policy, seeded)).toBe(false)
+  const page = {...item, type: 'Page', root: 'pages'}
+  expect(explorerItemCanDelete(policy, page)).toBe(true)
+  const denied = new WriteablePolicy(getScope(config))
+    .allowAll()
+    .set({id: 'file', deny: {delete: true, move: true}})
+  expect(explorerItemCanDelete(denied, item)).toBe(false)
+  expect(explorerItemCanMove(denied, item)).toBe(false)
+})
+
+const Item = Config.document('Item', {
+  contains: ['Item'],
+  fields: {title: Field.text('Title')}
+})
+const ownWorkspace = Config.workspace('Own', {
+  source: 'own',
+  roots: {
+    pages: Config.root('Pages', {contains: ['Item']}),
+    media: Config.root('Media', {contains: ['Item']})
+  }
+})
+const sharedWorkspace = Config.workspace('Shared', {
+  source: 'shared',
+  roots: {
+    pages: Config.root('Pages', {contains: ['Item']}),
+    media: Config.root('Media', {contains: ['Item']})
+  }
+})
+const exploreConfig = Config.create({
+  schema: {Item},
+  workspaces: {own: ownWorkspace, shared: sharedWorkspace}
+})
+
+/** An editor of their own workspace that can link to a shared one */
+async function exploreFixture() {
+  const db = new LocalDB(exploreConfig)
+  await db.sync()
+  const folder = await db.create({
+    type: Item,
+    workspace: 'shared',
+    root: 'pages',
+    set: {title: 'Shared folder'}
+  })
+  await db.create({
+    type: Item,
+    workspace: 'shared',
+    root: 'pages',
+    parentId: folder._id,
+    set: {title: 'Shared page'}
+  })
+  await db.create({
+    type: Item,
+    workspace: 'own',
+    root: 'pages',
+    set: {title: 'Own page'}
+  })
+  const store = createDashboardStore(exploreConfig, db)
+  await store.get(userPolicyReadyAtom)
+  const policy = new WriteablePolicy(getScope(exploreConfig)).set(
+    {workspace: ownWorkspace, allow: {all: true}},
+    {workspace: sharedWorkspace, allow: {explore: true}, grant: 'explicit'},
+    {root: sharedWorkspace.pages, allow: {explore: true}},
+    {root: sharedWorkspace.media, allow: {explore: true}}
+  )
+  store.set(preloadUserPolicyAtom, localUser, policy)
+  return {folder, store}
+}
+
+test('pickers offer the locations that can be explored', async () => {
+  const {store} = await exploreFixture()
+  const location = {workspace: 'own', root: 'pages'}
+  const picker = createExplorerAtoms(location, {
+    permission: Permission.Explore
+  })
+  const browser = createExplorerAtoms(location, {})
+
+  expect(store.get(workspacesAtom)).toEqual(['own'])
+  expect(store.get(picker.locations)).toEqual([
+    {workspace: 'own', root: 'pages'},
+    {workspace: 'own', root: 'media'},
+    {workspace: 'shared', root: 'pages'},
+    {workspace: 'shared', root: 'media'}
+  ])
+  expect(store.get(browser.locations)).toEqual([
+    {workspace: 'own', root: 'pages'},
+    {workspace: 'own', root: 'media'}
+  ])
+})
+
+test('media pickers offer and search only media roots', async () => {
+  const Page = Config.document('Page', {
+    contains: ['Page'],
+    fields: {title: Field.text('Title')}
+  })
+  const workspace = (label: string) =>
+    Config.workspace(label, {
+      source: label,
+      roots: {
+        pages: Config.root('Pages', {contains: ['Page']}),
+        media: Config.media(),
+        uploads: Config.media()
+      }
+    })
+  const config = Config.create({
+    schema: {Page},
+    workspaces: {main: workspace('main'), other: workspace('other')}
+  })
+  const db = new LocalDB(config)
+  await db.create({type: Page, root: 'pages', set: {title: 'Shared'}})
+  const store = createDashboardStore(config, db)
+  await store.get(userPolicyReadyAtom)
+  const picker = createExplorerAtoms(
+    {workspace: 'main', root: 'media'},
+    {allowAllWorkspaces: true, media: true}
+  )
+
+  expect(store.get(picker.locations)).toEqual([
+    {workspace: 'main', root: 'media'},
+    {workspace: 'main', root: 'uploads'},
+    {workspace: 'other', root: 'media'},
+    {workspace: 'other', root: 'uploads'}
+  ])
+  store.set(picker.search, 'Shared')
+  store.set(picker.searchScope, 'everything')
+  expect(await store.get(picker.itemsReady(null))).toEqual([])
+})
+
+test('pickers list and search entries that can be explored', async () => {
+  const {folder, store} = await exploreFixture()
+  const location = {workspace: 'shared', root: 'pages'}
+  const picker = createExplorerAtoms(location, {
+    allowAllWorkspaces: true,
+    permission: Permission.Explore
+  })
+  const browser = createExplorerAtoms(location, {allowAllWorkspaces: true})
+  const titles = async (explorer: typeof picker) =>
+    (await store.get(explorer.itemsReady(null))).map(item => item.title).sort()
+
+  expect(await titles(picker)).toEqual(['Shared folder'])
+  expect(await titles(browser)).toEqual([])
+
+  for (const explorer of [picker, browser]) {
+    store.set(explorer.search, 'Shared')
+    store.set(explorer.searchScope, 'everything')
+  }
+  expect(await titles(picker)).toEqual(['Shared folder', 'Shared page'])
+  expect(await titles(browser)).toEqual([])
+
+  store.set(picker.search, '')
+  store.set(picker.location, {...location, parentId: folder._id})
+  const page = await store.get(picker.pageReady)
+  expect(page.parent?.title).toBe('Shared folder')
+  expect(page.items.map(item => item.title)).toEqual(['Shared page'])
+})
+
+test('picker trees list entries that can be explored', async () => {
+  const {folder, store} = await exploreFixture()
+  const root = rootAtoms('shared', 'pages')
+  const selected = atom(new Set<Key>())
+  const expanded = () => atom(new Set([folder._id]))
+  const picker = root.createTree(
+    null,
+    selected,
+    {expandedKeys: expanded()},
+    Permission.Explore
+  )
+  const sidebar = root.createTree(null, selected, {
+    expandedKeys: expanded()
+  })
+
+  const listed = await store.get(picker.ready)
+  expect([...listed.entries.values()].map(entry => entry.title)).toEqual([
+    'Shared folder',
+    'Shared page'
+  ])
+  expect((await store.get(sidebar.ready)).entries.size).toBe(0)
+})
+
+test('search results are not taken by matches that are not listed', async () => {
+  const config = Config.create({
+    schema: {Item},
+    workspaces: {
+      main: Config.workspace('Main', {
+        source: '.',
+        roots: {
+          secret: Config.root('Secret', {contains: ['Item']}),
+          pages: Config.root('Pages', {contains: ['Item']})
+        }
+      })
+    }
+  })
+  const db = new LocalDB(config)
+  await db.sync()
+  for (let i = 0; i < searchResultLimit; i++)
+    await db.create({type: Item, root: 'secret', set: {title: 'Match'}})
+  await db.create({type: Item, root: 'pages', set: {title: 'Match'}})
+  const store = createDashboardStore(config, db)
+  await store.get(userPolicyReadyAtom)
+  const policy = new WriteablePolicy(getScope(config)).set({
+    root: config.workspaces.main.pages,
+    allow: {read: true}
+  })
+  store.set(preloadUserPolicyAtom, localUser, policy)
+  const explorer = createExplorerAtoms(
+    {workspace: 'main', root: 'pages'},
+    {mode: 'search'}
+  )
+  store.set(explorer.search, 'Match')
+
+  const items = await store.get(explorer.itemsReady(null))
+  expect(items.map(item => item.root)).toEqual(['pages'])
+})

@@ -1,0 +1,40 @@
+import {hasPreviewImage} from '#/core/media/Pdf.js'
+import type {OverviewCellProps} from '#/core/Overview.js'
+import styler from '@alinea/styler'
+import {fileKindVisual} from './FileKind.js'
+import css from './MediaPreviewCell.module.css'
+
+const styles = styler(css)
+
+export interface MediaPreviewCellValue {
+  preview?: string | null
+  averageColor?: string | null
+  extension?: string | null
+}
+
+/** The preview column of the media library */
+export function MediaPreviewCell({
+  value
+}: OverviewCellProps<MediaPreviewCellValue | undefined>) {
+  const preview = value?.preview
+  const extension = value?.extension
+  if (preview && extension && hasPreviewImage(extension))
+    return (
+      <span
+        className={styles.MediaPreviewCell()}
+        style={{background: value?.averageColor ?? undefined}}
+      >
+        <img alt="" className={styles.MediaPreviewCell.image()} src={preview} />
+      </span>
+    )
+  if (!extension) return <span className={styles.MediaPreviewCell()} />
+  const {icon: Icon, iconColor} = fileKindVisual(extension)
+  return (
+    <span className={styles.MediaPreviewCell({file: true})}>
+      <Icon
+        className={styles.MediaPreviewCell.icon()}
+        style={{color: iconColor}}
+      />
+    </span>
+  )
+}

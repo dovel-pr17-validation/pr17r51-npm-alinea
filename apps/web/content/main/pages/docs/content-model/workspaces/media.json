@@ -1,0 +1,512 @@
+{
+  "_id": "2aB45fUcIgu0Wx0NMULlU8VH7KK",
+  "_type": "Doc",
+  "_index": "Zx",
+  "title": "Media",
+  "navigationTitle": "",
+  "body": [
+    {
+      "_type": "paragraph",
+      "textAlign": "left",
+      "content": [
+        {
+          "_type": "text",
+          "text": "A media root holds the images and files editors upload. Add one to a "
+        },
+        {
+          "_type": "text",
+          "text": "workspace",
+          "marks": [
+            {
+              "_type": "link",
+              "_id": "2aAy4B81RXHCA8y06tSaep6CBen",
+              "_link": "entry",
+              "_entry": "259EzPfnSUaKOrNL1S2bpIpMdKl"
+            }
+          ]
+        },
+        {
+          "_type": "text",
+          "text": " with `Config.media()` and set the workspace's `mediaDir` to the folder the files are written to. Link to uploads with the "
+        },
+        {
+          "_type": "text",
+          "text": "Image",
+          "marks": [
+            {
+              "_type": "link",
+              "_id": "3JkF0BPKV5b3VAoiTnAnsxh58Xi",
+              "_link": "entry",
+              "_entry": "Xu4-sW6S0ynehY5zKR1VZ"
+            }
+          ]
+        },
+        {
+          "_type": "text",
+          "text": ", "
+        },
+        {
+          "_type": "text",
+          "text": "File",
+          "marks": [
+            {
+              "_type": "link",
+              "_id": "3JkF08RmGMh0aUQ7lI8Gm20TX78",
+              "_link": "entry",
+              "_entry": "tlhZ01MHUjv3Od172Ew6w"
+            }
+          ]
+        },
+        {
+          "_type": "text",
+          "text": " and "
+        },
+        {
+          "_type": "text",
+          "text": "Link",
+          "marks": [
+            {
+              "_type": "link",
+              "_id": "3JkF08zJLB1ot2n8cdr9uqVtLzp",
+              "_link": "entry",
+              "_entry": "24yE79dE2ssYPDQQHFFgT0eg2tH"
+            }
+          ]
+        },
+        {
+          "_type": "text",
+          "text": " fields."
+        }
+      ]
+    },
+    {
+      "_type": "CodeBlock",
+      "_id": "2aB4BmlaljcbjYyF3KAxVvZgLhW",
+      "code": "import {Config} from 'alinea'\n\nexport const main = Config.workspace('My site', {\n  source: 'content',\n  mediaDir: 'public/media',\n  roots: {\n    pages: Config.root('Pages'),\n    media: Config.media()\n  }\n})",
+      "fileName": "",
+      "language": "tsx"
+    },
+    {
+      "_type": "paragraph",
+      "textAlign": "left",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Editors upload files in the media root of the dashboard and organize them in folders."
+        }
+      ]
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "What's stored"
+        }
+      ],
+      "_anchor": "whats-stored"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Every upload is saved in two places:"
+        }
+      ]
+    },
+    {
+      "_type": "bulletList",
+      "content": [
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "The file itself goes to `mediaDir`, named after the original file plus the id of its entry: `public/media/landscape.2V4c3kRS.jpg`."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "A media entry is stored with your content, in the media root: `content/media/landscape.json`. It holds the title, the file location, the extension and size, a content hash and, for images, the width and height, the average color, a thumbhash placeholder, the focal point and the alt text. Its metadata records who uploaded the file and who last changed it, and when."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Folders are entries too. Links store the id of the media entry, so moving or renaming a file in the dashboard doesn't break them."
+        }
+      ]
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Urls"
+        }
+      ],
+      "_anchor": "urls"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Your site serves uploads at `/admin/file/<folders>/<name>.<extension>`, below the `adminPath` of your config. `withAlinea` forwards those requests to your Alinea handler, which serves the public copy of the file. When a file is moved or renamed, its old url keeps working. Set `mediaUrl` on the workspace to add a prefix, for example when two workspaces could have files with the same name."
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "So keep `mediaDir` inside your public folder, and don't change it once there are uploads: entries store file locations relative to it."
+        }
+      ]
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Options"
+        }
+      ],
+      "_anchor": "options"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "`Config.media(options)` takes the same options as "
+        },
+        {
+          "_type": "text",
+          "text": "`Config.root`",
+          "marks": [
+            {
+              "_type": "link",
+              "_id": "3JkF0CHOgF4k0wzcKLO1ub2XWH8",
+              "_link": "entry",
+              "_entry": "28hcdyq0sGJdgY6kM24NZd1XP5S"
+            }
+          ]
+        },
+        {
+          "_type": "text",
+          "text": ", with media-specific behaviour:"
+        }
+      ]
+    },
+    {
+      "_type": "bulletList",
+      "content": [
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`i18n`: translate the alt text of files. Files themselves aren't localised: every locale uses the same file, and editors enter an alt text per locale. Image links return the alt text in the locale of the entry you queried. Add a `fallback` function to choose which locales to try when a translation is missing: `fallback: locale => ['en']`."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`children`: folders that always exist."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`icon`, `orderChildrenBy` and `view`, as for other roots."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "The label of a media root is always \"Media\". A workspace can have several media roots; uploads that don't target a specific folder go to the first one."
+        }
+      ]
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "File types"
+        }
+      ],
+      "_anchor": "file-types"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "A media root holds media files: an upload becomes a `MediaFile` entry with an alt text. Use `Config.file` to define your own types of files, with fields of their own, and place them in any root, just like other types. A file type gets the data of the upload (location, extension, size, hash and, for images, the dimensions, preview and focus point) next to its fields."
+        }
+      ]
+    },
+    {
+      "_type": "CodeBlock",
+      "_id": "3LWr7wahcuLHYJfnJV8MW9KUyvd",
+      "code": "import {Config, Field} from 'alinea'\n\nexport const Photo = Config.file('Photo', {\n  accept: 'image/*',\n  fields: {\n    alt: Field.localised(Field.text('Alt text')),\n    credit: Field.text('Credit')\n  }\n})\n\nexport const Logo = Config.file('Logo', {accept: 'image/*'})\nexport const Download = Config.file('Download', {accept: '.pdf,.docx'})\n\nexport const Folder = Config.type('Folder', {\n  contains: ['Folder', 'Photo', 'Logo', 'Download'],\n  fields: {}\n})\n\nConfig.root('Library', {\n  contains: ['Folder', 'Photo', 'Download'],\n  i18n: {locales: ['en', 'nl'], translate: 'fields'}\n})",
+      "fileName": "schema/Library.ts",
+      "language": "tsx"
+    },
+    {
+      "_type": "bulletList",
+      "content": [
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`accept` lists the files of the type, like the accept attribute of a file input: extensions (`.pdf`), media types (`application/pdf`) and groups of them (`image/*`). Without it the type takes every file."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Editors can upload wherever the folder they are in, or the root at the top level, contains a file type. An upload becomes the first of those types that accepts the file. When several accept it, the upload dialog asks which one to use, and files none of them accepts are left out."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Image and file fields pick files of every file type. Queries select the data of a file with `ImageLink` and `FileLink`, and your own fields with the fields of the file type."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "File types follow the rules of media files: uploading publishes them, they have no drafts, and deleting an entry deletes its file."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "In a root that translates fields, `Field.localised` fields of files hold a value per locale, as the alt text of media files does."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "The built-in `MediaFile` type takes tabs and fields of your own as well: define it in the schema with `Config.mediaFile`. Files uploaded before have them too, and queries naming `MediaFile` find it."
+        }
+      ]
+    },
+    {
+      "_type": "CodeBlock",
+      "_id": "3L3CWnTEvH6gRwtu1A51dqUDSOB",
+      "code": "import {Config, Field} from 'alinea'\nimport {createCMS} from 'alinea/next'\n\nexport const cms = createCMS({\n  schema: {\n    ...schema,\n    MediaFile: Config.mediaFile({\n      tabs: {\n        analytics: Field.tab('Analytics', {view: '@/views/MediaAnalytics'})\n      }\n    })\n  },\n  workspaces\n})",
+      "fileName": "cms.tsx",
+      "language": "tsx"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Media folders are entries of the built-in `MediaLibrary` type. Define it in the schema with `Config.mediaLibrary` to change how folders list their contents, or to give them tabs and fields of your own. Its `overview` option replaces the built-in one, which `Config.mediaOverview()` returns so you can reuse and extend its columns, sorts and filters. Queries naming `MediaLibrary` find it."
+        }
+      ]
+    },
+    {
+      "_type": "CodeBlock",
+      "_id": "3LJhznyPduJ6whvxVNyP3Juc8X5",
+      "code": "import {Config} from 'alinea'\nimport {createCMS} from 'alinea/next'\n\n// The built-in columns of media folders, without dimensions\nconst {dimensions, ...columns} = Config.mediaOverview().columns!\n\nexport const cms = createCMS({\n  schema: {\n    ...schema,\n    MediaLibrary: Config.mediaLibrary({\n      overview: {\n        ...Config.mediaOverview(),\n        columns: {\n          ...columns,\n          downloads: Config.column({\n            header: 'Downloads',\n            view: '@/views/DownloadsCell'\n          })\n        }\n      }\n    })\n  },\n  workspaces\n})",
+      "fileName": "cms.tsx",
+      "language": "tsx"
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Limits and production"
+        }
+      ],
+      "_anchor": "limits-and-production"
+    },
+    {
+      "_type": "bulletList",
+      "content": [
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Set `maxUploadSize` in your "
+                },
+                {
+                  "_type": "text",
+                  "text": "config",
+                  "marks": [
+                    {
+                      "_type": "link",
+                      "_id": "3JkF0Cz04DRhmdKFUl8inbs4ovZ",
+                      "_link": "entry",
+                      "_entry": "259Ey7LXgqL7ZDGJ8XK1vBJmZrh"
+                    }
+                  ]
+                },
+                {
+                  "_type": "text",
+                  "text": " (in bytes) to refuse larger uploads."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Committing uploads to Git works well for images and documents, less so for large videos. When you deploy with your own backend, uploads can go to S3-compatible storage instead, see "
+                },
+                {
+                  "_type": "text",
+                  "text": "Self-hosted",
+                  "marks": [
+                    {
+                      "_type": "link",
+                      "_id": "3JkF07GARQwQU3N88zK66n8WCY5",
+                      "_link": "entry",
+                      "_entry": "2YlEGKqhO4mqRqEwQexeqRI8Jfu"
+                    }
+                  ]
+                },
+                {
+                  "_type": "text",
+                  "text": "."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "title": "",
+    "description": "",
+    "openGraph": {
+      "title": "",
+      "image": {},
+      "description": ""
+    },
+    "createdAt": 1790189231,
+    "createdBy": {
+      "name": "Ben Merckx",
+      "email": "ben@codeurs.be"
+    },
+    "updatedAt": 1790196932,
+    "updatedBy": {
+      "name": "Ben Merckx",
+      "email": "ben@codeurs.be"
+    }
+  }
+}

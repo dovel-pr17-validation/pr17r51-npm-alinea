@@ -1,0 +1,225 @@
+@use '@/style' as *;
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 64px;
+
+  @include sm {
+    gap: 48px;
+  }
+
+  &-controls {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    border-bottom: 1px solid var(--web-outline);
+
+    @include sm {
+      flex-direction: column-reverse;
+      align-items: stretch;
+      gap: 16px;
+    }
+  }
+
+  &-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 28px;
+    min-width: 0;
+
+    @include sm {
+      // Scroll the tabs sideways instead of wrapping them on small screens
+      flex-wrap: nowrap;
+      overflow-x: auto;
+      margin: 0 calc(-1 * var(--web-gutter));
+      padding: 0 var(--web-gutter);
+      scrollbar-width: none;
+
+      &::-webkit-scrollbar {
+        display: none;
+      }
+    }
+  }
+
+  &-tab {
+    flex-shrink: 0;
+    padding: 10px 0;
+    margin-bottom: -1px;
+    border-bottom: 2px solid transparent;
+    color: var(--web-foreground-faded);
+    font-size: 14.5px;
+    font-weight: 500;
+    line-height: 1.4;
+    cursor: pointer;
+    transition:
+      border-color 0.15s,
+      color 0.15s;
+
+    &:hover {
+      color: var(--web-foreground);
+    }
+
+    &:focus-visible {
+      color: var(--web-foreground);
+      outline: 2px solid var(--web-accent);
+      outline-offset: -2px;
+      border-radius: 4px;
+    }
+
+    &.is-selected {
+      color: var(--web-foreground);
+      border-bottom-color: var(--web-accent);
+    }
+  }
+
+  &-search {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 240px;
+    height: 38px;
+    margin-bottom: 8px;
+    padding: 0 12px;
+    border-radius: 8px;
+    border: 1px solid var(--web-outline-strong);
+    color: var(--web-foreground-muted);
+    cursor: text;
+    transition: border-color 0.15s;
+
+    &:focus-within {
+      border-color: var(--web-accent);
+      outline: 3px solid var(--web-accent-soft);
+    }
+
+    @include sm {
+      width: 100%;
+      margin-bottom: 0;
+    }
+
+    &-icon {
+      flex-shrink: 0;
+      font-size: 15px;
+    }
+
+    &-input {
+      flex-grow: 1;
+      min-width: 0;
+      border: none;
+      outline: none;
+      background: transparent;
+      color: var(--web-foreground);
+      font: 400 14.5px/1 var(--web-body-font);
+
+      &::placeholder {
+        color: var(--web-foreground-muted);
+      }
+    }
+  }
+
+  &-status {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  &-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 88px;
+
+    @include sm {
+      gap: 64px;
+    }
+  }
+
+  &-group {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+
+    &[hidden] {
+      display: none;
+    }
+  }
+
+  &-heading {
+    font: var(--web-docs-font-h2);
+    letter-spacing: var(--web-docs-tracking-heading);
+    color: var(--web-foreground);
+  }
+
+  &-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 44px 32px;
+    list-style: none;
+
+    @media (max-width: 1279.999px) {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    @include s {
+      grid-template-columns: minmax(0, 1fr);
+      row-gap: 36px;
+    }
+  }
+
+  &-item {
+    display: flex;
+    min-width: 0;
+
+    &[hidden] {
+      display: none;
+    }
+  }
+
+  &-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 48px 24px;
+    border-radius: 12px;
+    background: var(--web-surface-soft);
+    font: var(--web-docs-font-compact);
+    color: var(--web-foreground-faded);
+    text-align: center;
+
+    &-clear {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 34px;
+      padding: 0 12px;
+      border-radius: 8px;
+      border: 1px solid var(--web-outline-strong);
+      color: var(--web-foreground);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+
+      &:hover {
+        border-color: color-mix(
+          in srgb,
+          var(--web-foreground) 30%,
+          var(--web-outline-strong)
+        );
+      }
+
+      &:focus-visible {
+        outline: 2px solid var(--web-accent);
+        outline-offset: 2px;
+      }
+
+      &-icon {
+        font-size: 14px;
+      }
+    }
+  }
+}

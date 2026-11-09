@@ -1,0 +1,115 @@
+@use '@/style' as *;
+
+.root {
+  position: relative;
+  padding: 64px 0 48px;
+  border-top: 1px solid var(--web-outline);
+  background: var(--web-background);
+  color: var(--web-foreground);
+
+  @include sm {
+    padding: 40px 0;
+  }
+
+  &-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 64px;
+    width: 100%;
+    max-width: calc(var(--web-content-width) + 2 * var(--web-gutter));
+    margin-inline: auto;
+    padding-inline: var(--web-gutter);
+
+    @include sm {
+      gap: 32px;
+    }
+  }
+
+  &-top {
+    display: flex;
+    gap: 64px;
+
+    @include sm {
+      flex-direction: column;
+      gap: 32px;
+    }
+  }
+
+  &-about {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 380px;
+    flex-shrink: 0;
+
+    @include sm {
+      width: auto;
+    }
+  }
+
+  &-logo {
+    display: flex;
+    align-self: flex-start;
+    color: var(--web-foreground);
+
+    &-mark {
+      width: 80px;
+    }
+  }
+
+  &-description {
+    margin: 0;
+    max-width: 300px;
+    font-size: 14.5px;
+    line-height: 1.6;
+    color: var(--web-foreground-faded);
+  }
+
+  &-columns {
+    flex-grow: 1;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 48px;
+    font-size: 14.5px;
+    line-height: 1.5;
+
+    @include s {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 28px 12px;
+    }
+  }
+
+  &-column {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+
+    &-title {
+      margin-bottom: 6px;
+      font-size: 13px;
+      font-weight: 500;
+    }
+
+    &-link {
+      color: var(--web-foreground-faded);
+      transition: color 0.2s ease-out;
+
+      &:is(:hover, :focus-visible) {
+        color: var(--web-foreground);
+      }
+    }
+  }
+
+  &-bottom {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 8px 24px;
+    padding-top: 24px;
+    border-top: 1px solid var(--web-outline);
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--web-foreground-muted);
+  }
+}

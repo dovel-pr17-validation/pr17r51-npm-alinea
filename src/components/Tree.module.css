@@ -1,0 +1,215 @@
+.Tree {
+  overflow: auto;
+  outline: none;
+  forced-color-adjust: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--alinea-border-strong) transparent;
+  flex: 1;
+
+  &:focus-visible {
+    outline: 2px solid var(--alinea-ring);
+    outline-offset: -1px;
+  }
+}
+
+.Tree-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  font-style: italic;
+  color: var(--alinea-fg-muted);
+}
+
+.Tree-dropIndicator {
+  position: relative;
+  height: 0;
+  margin: 0 10px;
+  pointer-events: none;
+  z-index: 2;
+
+  &.is-active::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    height: 2px;
+    transform: translateY(-50%);
+    border-radius: 2px;
+    background: var(--alinea-primary);
+  }
+}
+
+.TreeItem {
+  height: 34px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 12px;
+  padding-left: calc(8px + (var(--alinea-tree-level, 1) - 1) * 16px);
+  font-size: var(--alinea-font-size-base);
+  font-weight: 400;
+  background: transparent;
+  color: var(--alinea-fg);
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  outline: none;
+  border-radius: var(--alinea-radius);
+  user-select: none;
+
+  &:hover {
+    background: var(--alinea-muted);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--alinea-ring);
+    background: var(--alinea-muted);
+    outline-offset: -2px;
+  }
+
+  &[aria-selected='true'] {
+    background: var(--alinea-selected);
+    color: var(--alinea-primary-subtle-fg);
+    font-weight: 600;
+
+    &.is-expanded {
+      border-bottom-left-radius: 0;
+      border-bottom-right-radius: 0;
+    }
+
+    &:focus-visible {
+      outline-color: var(--alinea-primary-subtle-fg);
+      outline-offset: -4px;
+    }
+  }
+
+  &:has(.TreeItem-labelLink[aria-current]):not([aria-selected='true']) {
+    color: var(--alinea-primary-subtle-fg);
+    font-weight: 600;
+  }
+
+  &[aria-disabled='true'] {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  &.is-allowsDragging {
+    padding-left: calc(4px + (var(--alinea-tree-level, 1) - 1) * 16px);
+    -webkit-user-drag: element;
+    touch-action: none;
+  }
+
+  &.is-dragging {
+    opacity: 0.6;
+  }
+
+  &.is-dropTarget {
+    outline: 1px solid var(--alinea-primary);
+    background: color-mix(in oklab, var(--alinea-primary) 10%, transparent);
+  }
+}
+
+.TreeItem-controls {
+  position: relative;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+}
+
+.TreeItem-chevron {
+  all: unset;
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  visibility: hidden;
+  color: var(--alinea-fg);
+
+  .TreeItem.is-expandable & {
+    visibility: visible;
+  }
+
+  &.is-invisible {
+    opacity: 0;
+  }
+}
+
+.TreeItem-foldIcon {
+  width: 16px;
+  height: 16px;
+}
+
+.TreeItem-dragHandle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 15px;
+  text-align: center;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 1.05rem;
+  line-height: 1.2em;
+  padding: 0;
+  opacity: 0;
+
+  &:focus-visible {
+    outline: 2px solid var(--alinea-ring);
+    opacity: 1;
+  }
+
+  .TreeItem.is-dragging & {
+    opacity: 0;
+  }
+}
+
+.TreeItem-controls:has(.TreeItem-dragHandle:focus-visible) .TreeItem-chevron {
+  opacity: 0;
+}
+
+.TreeItem-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.TreeItem-iconLink {
+  display: flex;
+  color: inherit;
+}
+
+.TreeItem-label {
+  margin-left: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.TreeItem-labelLink {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: inherit;
+  text-decoration: none;
+}
+
+.TreeItem-suffix {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 14px;
+  color: var(--alinea-fg-muted);
+}

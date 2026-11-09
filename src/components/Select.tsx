@@ -1,0 +1,257 @@
+import styler from '@alinea/styler'
+import {
+  type KeyboardEvent,
+  type ReactElement,
+  type ReactNode,
+  type RefObject,
+  useContext,
+  useRef,
+  useState
+} from 'react'
+import {
+  Button,
+  ListBox,
+  Select as SelectPrimitive,
+  SelectStateContext,
+  SelectValue,
+  Separator
+} from 'react-aria-components'
+import {IcRoundClose, IcRoundKeyboardArrowDown} from '#/dashboard/icons.js'
+import {Field} from './Field.js'
+import {Icon} from './Icon.js'
+import {ListBoxGroup} from './internal/ListBoxGroup.js'
+import {ListBoxOption} from './internal/ListBoxOption.js'
+import {PopoverSurface} from './internal/PopoverSurface.js'
+import css from './Select.module.css'
+import type {
+  AriaProps,
+  DataProps,
+  FieldSharedProps,
+  IconType,
+  Key,
+  OpenStateProps,
+  StyleProps
+} from './types.js'
+
+const styles = styler(css)
+
+export interface SelectProps<V extends Key = Key>
+  extends FieldSharedProps, OpenStateProps, StyleProps, AriaProps, DataProps {
+  /** The value of the selected SelectItem */
+  value?: V | null
+  defaultValue?: V | null
+  /** Called with the selected value, or null when the value is cleared */
+  onValueChange?: (value: V | null) => void
+  placeholder?: string
+  /** Show a button that clears the value */
+  clearable?: boolean
+  /** Name of the hidden form input carrying the value */
+  name?: string
+  autoFocus?: boolean
+  /** `sm` is as tall as a default Button, defaults to `default` */
+  size?: 'default' | 'sm'
+  /** SelectItem, SelectGroup and SelectSeparator elements */
+  children: ReactNode
+}
+
+/**
+ * A labelled field to pick a single value from a list. Set `clearable` to
+ * let the value be cleared again.
+ */
+export function Select<V extends Key = Key>({
+  label,
+  description,
+  error,
+  required,
+  disabled,
+  readOnly,
+  icon,
+  shared,
+  value,
+  defaultValue,
+  onValueChange,
+  open,
+  defaultOpen,
+  onOpenChange,
+  placeholder,
+  clearable,
+  size = 'default',
+  className,
+  style,
+  children,
+  ...props
+}: SelectProps<V>) {
+  const triggerRef = useRef<HTMLDivElement>(null)
+  const [isOpen, setOpen] = useState(defaultOpen ?? false)
+  return (
+    <SelectPrimitive
+      data-slot="select"
+      {...props}
+      className={styles.Select(styler.merge({className}))}
+      style={style}
+      selectedKey={value}
+      defaultSelectedKey={defaultValue}
+      onSelectionChange={key => onValueChange?.(key as V | null)}
+      // A read only select can be focused but not opened
+      isOpen={!readOnly && (open ?? isOpen)}
+      onOpenChange={next => {
+        if (readOnly) return
+        setOpen(next)
+        onOpenChange?.(next)
+      }}
+      isDisabled={disabled}
+      isRequired={required}
+      isInvalid={error ? true : undefined}
+      placeholder={placeholder}
+    >
+      <Field
+        label={label}
+        description={description}
+        error={error}
+        required={required}
+        disabled={disabled}
+        readOnly={readOnly}
+        icon={icon}
+        shared={shared}
+      >
+        <SelectTrigger
+          triggerRef={triggerRef}
+          size={size}
+          clearable={Boolean(clearable) && !disabled && !readOnly}
+          invalid={Boolean(error)}
+          readOnly={readOnly}
+        />
+        <PopoverSurface
+          data-slot="select-content"
+          triggerRef={triggerRef}
+          matchTriggerWidth
+        >
+          <ListBox className={styles.SelectContent.list()}>{children}</ListBox>
+        </PopoverSurface>
+      </Field>
+    </SelectPrimitive>
+  )
+}
+
+interface SelectTriggerProps {
+  triggerRef: RefObject<HTMLDivElement>
+  size: 'default' | 'sm'
+  clearable: boolean
+  invalid: boolean
+  readOnly?: boolean
+}
+
+function SelectTrigger({
+  triggerRef,
+  size,
+  clearable,
+  invalid,
+  readOnly
+}: SelectTriggerProps) {
+  const state = useContext(SelectStateContext)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const hasValue = Boolean(state && state.selectedItems.length > 0)
+  return (
+    <div
+      ref={triggerRef}
+      data-slot="select-trigger"
+      data-size={size}
+      data-invalid={invalid || undefined}
+      data-readonly={readOnly || undefined}
+      className={styles.SelectTrigger()}
+      onKeyDownCapture={readOnly ? preventSelectionKeys : undefined}
+    >
+      <Button
+        ref={buttonRef}
+        data-slot="select-button"
+        className={styles.SelectTrigger.button()}
+        render={
+          readOnly
+            ? // react-aria does not pass aria-readonly on to the element
+              props => <button {...props} aria-readonly />
+            : undefined
+        }
+      >
+        <SelectValue
+          data-slot="select-value"
+          className={styles.SelectTrigger.value()}
+        >
+          {({isPlaceholder, defaultChildren}) =>
+            isPlaceholder ? (
+              <span className={styles.SelectTrigger.placeholder()}>
+                {defaultChildren}
+              </span>
+            ) : (
+              defaultChildren
+            )
+          }
+        </SelectValue>
+        <Icon
+          icon={IcRoundKeyboardArrowDown}
+          data-slot="select-icon"
+          className={styles.SelectTrigger.arrow()}
+        />
+      </Button>
+      {clearable && hasValue && (
+        <Button
+          slot={null}
+          aria-label="Clear"
+          data-slot="select-clear"
+          onPress={() => {
+            state?.setValue(null)
+            // The clear button unmounts, keep focus in the field
+            buttonRef.current?.focus()
+          }}
+          className={styles.SelectTrigger.clear()}
+        >
+          <Icon icon={IcRoundClose} />
+        </Button>
+      )}
+    </div>
+  )
+}
+
+/** Typing or arrowing on a closed trigger would still change the value */
+function preventSelectionKeys(event: KeyboardEvent) {
+  if (
+    event.key.length === 1 ||
+    event.key === 'ArrowLeft' ||
+    event.key === 'ArrowRight'
+  )
+    event.stopPropagation()
+}
+
+export interface SelectItemProps extends StyleProps {
+  value: Key
+  disabled?: boolean
+  icon?: IconType | ReactElement
+  /** Text used for typeahead and the value, defaults to string children */
+  textValue?: string
+  /** Secondary text shown below the label in the list */
+  description?: ReactNode
+  children: ReactNode
+}
+
+export function SelectItem(props: SelectItemProps) {
+  return <ListBoxOption slot="select-item" {...props} />
+}
+
+export interface SelectGroupProps extends AriaProps {
+  label?: ReactNode
+  children: ReactNode
+}
+
+export function SelectGroup(props: SelectGroupProps) {
+  return (
+    <ListBoxGroup slot="select-group" labelSlot="select-label" {...props} />
+  )
+}
+
+export function SelectSeparator() {
+  return (
+    <Separator
+      data-slot="select-separator"
+      className={styles.SelectSeparator()}
+    />
+  )
+}

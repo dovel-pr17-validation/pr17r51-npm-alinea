@@ -1,0 +1,27 @@
+.root {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  color: var(--web-foreground-faded);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: color 0.15s ease-out;
+
+  &:hover {
+    color: var(--web-foreground);
+  }
+
+  &:focus-visible {
+    color: var(--web-foreground);
+    border-radius: 4px;
+    outline: 2px solid var(--web-accent);
+    outline-offset: 3px;
+  }
+
+  &-icon {
+    font-size: 14px;
+  }
+}

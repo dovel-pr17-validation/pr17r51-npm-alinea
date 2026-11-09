@@ -1,0 +1,19 @@
+.EntrySidebarPreview {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.EntrySidebarPreview-empty {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 14px;
+}
+
+.EntrySidebarPreview-component {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}

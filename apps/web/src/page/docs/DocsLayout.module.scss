@@ -1,0 +1,35 @@
+@use '@/style' as *;
+
+.root {
+  // Height of everything that sticks to the top of the viewport, anchors
+  // scroll below it
+  --web-docs-offset: var(--web-header-height);
+
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+
+  @include sm {
+    --web-docs-offset: calc(var(--web-header-height) + 48px);
+  }
+
+  &-inner {
+    flex-grow: 1;
+    display: flex;
+    gap: 56px;
+    width: 100%;
+    max-width: calc(var(--web-content-width) + 2 * var(--web-gutter));
+    margin-inline: auto;
+    padding-inline: var(--web-gutter);
+
+    @media (max-width: 1279.999px) {
+      gap: 40px;
+    }
+  }
+
+  &-main {
+    flex-grow: 1;
+    min-width: 0;
+    outline: none;
+  }
+}

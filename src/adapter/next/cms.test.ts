@@ -1,0 +1,448 @@
+import {nextMocks} from '#test/NextMocks.js'
+import {composeBackend} from '#/backend/api/CreateBackend.js'
+import {MissingCredentialsError} from '#/backend/Auth.js'
+import {JsonLoader} from '#/backend/loader/JsonLoader.js'
+import {syncWait} from '#/backend/util/Syncable.js'
+import {LocalDB} from '#/database/LocalDB.js'
+import {Entry} from '#/core/Entry.js'
+import {createRecord} from '#/core/EntryRecord.js'
+import type {GraphQuery} from '#/core/Graph.js'
+import {Config} from '#/index.js'
+import {createFilePatch} from '#/core/source/FilePatch.js'
+import {chunkCookieValue} from '#/preview/ChunkCookieValue.js'
+import {PREVIEW_COOKIE_NAME} from '#/preview/PreviewCookies.js'
+import {encodePreviewPayload} from '#/preview/PreviewPayload.js'
+import * as iso from '@alinea/iso'
+import {afterEach, beforeEach, expect, jest, mock, test} from 'bun:test'
+import PLazy from 'p-lazy'
+import {mkdtemp, rm, writeFile} from 'node:fs/promises'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
+
+const phase = process.env.NEXT_PHASE
+const runtime = process.env.NEXT_RUNTIME
+type HandlerFetch = (
+  ...args: Parameters<typeof iso.fetch>
+) => ReturnType<typeof iso.fetch>
+const defaultFetch: HandlerFetch = iso.fetch
+let handlerFetch = defaultFetch
+
+mock.module('@alinea/iso', () => ({
+  ...iso,
+  fetch: (...args: Parameters<typeof iso.fetch>) => handlerFetch(...args)
+}))
+
+mock.module('next/constants.js', () => ({
+  PHASE_PRODUCTION_SERVER: 'production-server',
+  PHASE_PRODUCTION_BUILD: 'production-build'
+}))
+
+const [{NextCMS}, {createHandlerWithDatabase}] = await Promise.all([
+  import('./cms.js'),
+  import('./handler.js')
+])
+
+beforeEach(() => {
+  process.env.NEXT_PHASE = 'production-server'
+  nextMocks.cookies = []
+  nextMocks.draftMode = true
+  nextMocks.handlerUrl = new URL('https://example.com/api/cms')
+  nextMocks.apiKey = 'test-api-key'
+  handlerFetch = defaultFetch
+})
+
+afterEach(() => {
+  // The fetch mock is shared with the other test files of the run.
+  handlerFetch = defaultFetch
+  if (phase === undefined) delete process.env.NEXT_PHASE
+  else process.env.NEXT_PHASE = phase
+  if (runtime === undefined) delete process.env.NEXT_RUNTIME
+  else process.env.NEXT_RUNTIME = runtime
+})
+
+test('forwards Edge queries to the configured handler', async () => {
+  process.env.NEXT_RUNTIME = 'edge'
+  handlerFetch = mock(async input => {
+    const url = new URL(String(input))
+    expect(url.origin).toBe('https://example.com')
+    expect(url.pathname).toBe('/api/cms')
+    expect(url.searchParams.get('action')).toBe('resolve')
+    return Response.json([{title: 'Forwarded'}])
+  })
+  const cms = new NextCMS(Config.create({schema: {}, workspaces: {}}))
+
+  expect(await cms.resolve({})).toEqual([{title: 'Forwarded'}])
+  expect(handlerFetch).toHaveBeenCalledTimes(1)
+})
+
+test('draft mode queries with the preview status unless one is given', async () => {
+  process.env.NEXT_RUNTIME = 'edge'
+  const statuses = Array<unknown>()
+  handlerFetch = mock(async (_input, init) => {
+    statuses.push(JSON.parse(String(init?.body)).status)
+    return Response.json(null)
+  })
+  const cms = new NextCMS(Config.create({schema: {}, workspaces: {}}))
+  await cms.resolve({})
+  await cms.resolve({status: 'preferDraft'})
+  expect(statuses).toEqual(['preview', 'preferDraft'])
+})
+
+test('skips syncing a bundled database for a matching preview content hash', async () => {
+  const contentHash = 'matching-content-hash'
+  const syncWith = mock(async () => contentHash)
+  const resolve = mock(async (query: GraphQuery) => query)
+  const db = {
+    sha: contentHash,
+    first: mock(async () => undefined),
+    syncWith,
+    resolve
+  }
+  const cms = new NextCMS(Config.create({schema: {}, workspaces: {}}))
+  cms.bundledDb = PLazy.from(async () => db as unknown as LocalDB)
+  const payload = await encodePreviewPayload({
+    locale: null,
+    entryId: 'entry-id',
+    contentHash,
+    status: 'draft',
+    patch: new Uint8Array()
+  })
+  nextMocks.cookies = chunkCookieValue(PREVIEW_COOKIE_NAME, payload)
+
+  await cms.resolve({syncInterval: 0})
+
+  expect(syncWith).not.toHaveBeenCalled()
+})
+
+test('syncs a bundled database for a mismatched preview content hash', async () => {
+  const contentHash = 'requested-content-hash'
+  const syncWith = mock(async () => contentHash)
+  const resolve = mock(async (query: GraphQuery) => query)
+  const db = {
+    sha: 'stale-content-hash',
+    first: mock(async () => undefined),
+    syncWith: async () => {
+      db.sha = contentHash
+      return syncWith()
+    },
+    resolve
+  }
+  const cms = new NextCMS(Config.create({schema: {}, workspaces: {}}))
+  cms.bundledDb = PLazy.from(async () => db as unknown as LocalDB)
+  const payload = await encodePreviewPayload({
+    locale: null,
+    entryId: 'entry-id',
+    contentHash,
+    status: 'draft',
+    patch: new Uint8Array()
+  })
+  nextMocks.cookies = chunkCookieValue(PREVIEW_COOKIE_NAME, payload)
+
+  await cms.resolve({syncInterval: 0})
+
+  expect(syncWith).toHaveBeenCalledTimes(1)
+})
+
+test('syncs once for a stale preview content hash and still applies the patch', async () => {
+  const Page = Config.document('Page', {fields: {}})
+  const config = Config.create({
+    schema: {Page},
+    workspaces: {
+      main: Config.workspace('Main', {
+        source: 'content',
+        roots: {pages: Config.root('Pages')}
+      })
+    }
+  })
+  const db = new LocalDB(config)
+  await db.sync()
+  const entry = await db.create({
+    type: Page,
+    set: {title: 'Previewed entry'},
+    select: Entry
+  })
+  const contentHash = await db.sha
+  const baseText = new TextDecoder().decode(
+    JsonLoader.format(config.schema, createRecord(entry, entry.status))
+  )
+  const previewTitle = 'Updated in preview'
+  const updatedText = new TextDecoder().decode(
+    JsonLoader.format(
+      config.schema,
+      createRecord(
+        {
+          ...entry,
+          title: previewTitle,
+          data: {...entry.data, title: previewTitle}
+        },
+        entry.status
+      )
+    )
+  )
+  const patch = await createFilePatch(baseText, updatedText)
+  await db.create({type: Page, set: {title: 'Unrelated entry'}})
+  // The handler is at the revision this db already holds, which makes the
+  // sync triggered by the stale cookie hash a no-op.
+  handlerFetch = mock(async () => Response.json(null))
+  const syncWith = mock(db.syncWith.bind(db))
+  db.syncWith = syncWith
+  let initializations = 0
+  const cms = new NextCMS(config)
+  cms.bundledDb = PLazy.from(async () => {
+    initializations += 1
+    return db
+  })
+  const payload = await encodePreviewPayload({
+    locale: entry.locale,
+    entryId: entry.id,
+    contentHash,
+    status: entry.status,
+    patch
+  })
+  nextMocks.cookies = chunkCookieValue(PREVIEW_COOKIE_NAME, payload)
+
+  const results = await Promise.all([
+    cms.first({id: entry.id, select: Entry}),
+    cms.first({id: entry.id, select: Entry})
+  ])
+
+  expect(initializations).toBe(1)
+  // Once per resolve: React's cache() only dedups within a request scope,
+  // which bun test has none of. Each sync is a no-op against this db.
+  expect(syncWith).toHaveBeenCalled()
+  expect(results.map(result => result?.title)).toEqual([
+    previewTitle,
+    previewTitle
+  ])
+})
+
+test('syncs without asking the handler for the shared sha in draft mode', async () => {
+  const syncWith = mock(async () => 'remote-content-hash')
+  const db = {
+    sha: 'local-content-hash',
+    first: mock(async () => undefined),
+    syncWith,
+    resolve: mock(async (query: GraphQuery) => query)
+  }
+  handlerFetch = mock(async () => Response.json(null))
+  const cms = new NextCMS(Config.create({schema: {}, workspaces: {}}))
+  cms.bundledDb = PLazy.from(async () => db as unknown as LocalDB)
+
+  await cms.resolve({syncInterval: 5000})
+
+  expect(syncWith).toHaveBeenCalledTimes(1)
+  expect(handlerFetch).not.toHaveBeenCalled()
+})
+
+test('reports the bundled database revision and the last sync', async () => {
+  nextMocks.draftMode = false
+  const sha = 'synced-content-hash'
+  const db = {
+    sha: 'stale-content-hash',
+    syncWith: mock(async () => {
+      db.sha = sha
+      return sha
+    }),
+    resolve: mock(async (query: GraphQuery) => query)
+  }
+  const cms = new NextCMS(Config.create({schema: {}, workspaces: {}}))
+  cms.bundledDb = PLazy.from(async () => db as unknown as LocalDB)
+
+  expect(await cms.status()).toEqual({
+    source: 'database',
+    sha: 'stale-content-hash',
+    syncedAt: undefined
+  })
+  await cms.resolve({syncInterval: 0})
+  const status = await cms.status()
+  expect(status.source).toBe('database')
+  expect(status.sha).toBe(sha)
+  expect(status.syncedAt).toBeInstanceOf(Date)
+})
+
+test('reports the handler revision when queries are forwarded', async () => {
+  process.env.NEXT_RUNTIME = 'edge'
+  handlerFetch = mock(async () => Response.json('handler-content-hash'))
+  const cms = new NextCMS(Config.create({schema: {}, workspaces: {}}))
+
+  expect(await cms.status()).toEqual({
+    source: 'handler',
+    sha: 'handler-content-hash',
+    syncedAt: undefined
+  })
+})
+
+test('serves the bundled database when the handler cannot be synced', async () => {
+  nextMocks.draftMode = false
+  const db = {
+    sha: 'bundled-content-hash',
+    syncWith: mock(async () => {
+      throw new Error('Handler unavailable')
+    }),
+    resolve: mock(async (query: GraphQuery) => query)
+  }
+  const cms = new NextCMS(Config.create({schema: {}, workspaces: {}}))
+  cms.bundledDb = PLazy.from(async () => db as unknown as LocalDB)
+  const warn = console.warn
+  console.warn = mock(() => {})
+  try {
+    await cms.resolve({syncInterval: 0})
+    expect(db.resolve).toHaveBeenCalledTimes(1)
+    expect(console.warn).toHaveBeenCalledTimes(1)
+  } finally {
+    console.warn = warn
+  }
+  const status = await cms.status()
+  expect(status.sha).toBe('bundled-content-hash')
+  expect(status.syncedAt).toBeUndefined()
+})
+
+test('serves the bundled database while a sync with the handler hangs', async () => {
+  nextMocks.draftMode = false
+  const db = {
+    sha: 'bundled-content-hash',
+    syncWith: mock(() => new Promise<string>(() => {})),
+    resolve: mock(async (query: GraphQuery) => query)
+  }
+  const cms = new NextCMS(Config.create({schema: {}, workspaces: {}}))
+  cms.bundledDb = PLazy.from(async () => db as unknown as LocalDB)
+  const warn = console.warn
+  console.warn = mock(() => {})
+  try {
+    await settleWithin(cms.resolve({syncInterval: 0}), syncWait)
+    expect(db.resolve).toHaveBeenCalledTimes(1)
+    expect(console.warn).toHaveBeenCalledTimes(1)
+  } finally {
+    console.warn = warn
+  }
+})
+
+test('gives up on a handler that does not answer', async () => {
+  process.env.NEXT_RUNTIME = 'edge'
+  handlerFetch = mock(
+    (_, init) =>
+      new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener('abort', () =>
+          reject(init.signal!.reason)
+        )
+      })
+  )
+  const cms = new NextCMS(Config.create({schema: {}, workspaces: {}}))
+
+  const status = await settleWithin(cms.status(), 60_000)
+  expect(status.sha).toBeUndefined()
+})
+
+test('answers development queries from the dev server at every revision', async () => {
+  nextMocks.draftMode = false
+  nextMocks.devHandlerUrl = new URL('http://localhost:4500/api')
+  const database = process.env.ALINEA_GENERATED_DATABASE
+  const dir = await mkdtemp(join(tmpdir(), 'alinea-dev-db-'))
+  process.env.ALINEA_GENERATED_DATABASE = join(dir, 'alinea.db')
+  let title = 'First'
+  handlerFetch = mock(async input => {
+    expect(new URL(String(input)).origin).toBe('http://localhost:4500')
+    return Response.json([{title}])
+  })
+  try {
+    await writeFile(process.env.ALINEA_GENERATED_DATABASE, 'first')
+    const cms = new NextCMS(Config.create({schema: {}, workspaces: {}}))
+    expect(await cms.resolve({})).toEqual([{title: 'First'}])
+    title = 'Second'
+    await writeFile(process.env.ALINEA_GENERATED_DATABASE, 'second revision')
+    expect(await cms.resolve({})).toEqual([{title: 'Second'}])
+    expect(handlerFetch).toHaveBeenCalledTimes(2)
+  } finally {
+    nextMocks.devHandlerUrl = undefined
+    handlerFetch = defaultFetch
+    if (database === undefined) delete process.env.ALINEA_GENERATED_DATABASE
+    else process.env.ALINEA_GENERATED_DATABASE = database
+    await rm(dir, {recursive: true, force: true})
+  }
+})
+
+test('sends the dev key with uploads to the dev server only', async () => {
+  nextMocks.devHandlerUrl = new URL('http://localhost:4500/api')
+  let url = 'http://localhost:4500/?/upload&file=public%2Fa.jpg'
+  handlerFetch = mock(async () =>
+    Response.json({entryId: 'a', location: 'a.jpg', previewUrl: '', url})
+  )
+  try {
+    const cms = new NextCMS(Config.create({schema: {}, workspaces: {}}))
+    const local = await cms.prepareUpload('a.jpg')
+    expect(local.headers).toEqual({'x-alinea-dev-key': 'test-api-key'})
+    url = 'https://bucket.example.com/a.jpg?signature=1'
+    const remote = await cms.prepareUpload('a.jpg')
+    expect(remote.headers).toBeUndefined()
+  } finally {
+    nextMocks.devHandlerUrl = undefined
+    handlerFetch = defaultFetch
+  }
+})
+
+test('syncs through a handler that answers in the same process', async () => {
+  nextMocks.draftMode = false
+  const Page = Config.document('Page', {fields: {}})
+  const config = Config.create({
+    baseUrl: 'https://example.com',
+    handlerUrl: '/api/cms',
+    schema: {Page},
+    workspaces: {
+      main: Config.workspace('Main', {
+        source: 'content',
+        roots: {pages: Config.root('Pages')}
+      })
+    }
+  })
+  const content = new LocalDB(config)
+  await content.sync()
+  await content.create({type: Page, set: {title: 'Committed elsewhere'}})
+  // The CMS and the handler each open their own overlay: the CMS holds its
+  // store while syncing it through the handler, which syncs its own first.
+  const cms = new NextCMS(config)
+  cms.bundledDb = PLazy.from(async () => {
+    const store = new LocalDB(config)
+    await store.sync()
+    return store
+  })
+  const handle = createHandlerWithDatabase(
+    {
+      cms,
+      backend: () =>
+        composeBackend(content, {
+          async verify() {
+            throw new MissingCredentialsError('Only the release key')
+          }
+        })
+    },
+    async () => new LocalDB(config)
+  )
+  handlerFetch = mock(async (input, init) => handle(new Request(input, init)))
+
+  const titles = await cms.find({
+    type: Page,
+    select: Page.title,
+    syncInterval: 0
+  })
+
+  expect(titles).toEqual(['Committed elsewhere'])
+})
+
+/** Run fake timers forward until `promise` settles. */
+async function settleWithin<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let settled = false
+  const settle = () => {
+    settled = true
+  }
+  promise.then(settle, settle)
+  jest.useFakeTimers()
+  try {
+    for (let tick = 0; tick < 20 && !settled; tick++) {
+      await new Promise(resolve => setImmediate(resolve))
+      jest.advanceTimersByTime(ms)
+    }
+  } finally {
+    jest.useRealTimers()
+  }
+  return promise
+}

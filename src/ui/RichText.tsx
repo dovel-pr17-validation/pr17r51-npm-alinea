@@ -1,0 +1,375 @@
+import type {Infer} from '#/core/Infer.js'
+import {
+  BlockNode,
+  ElementNode,
+  Mark,
+  Node,
+  type TextDoc,
+  TextNode
+} from '#/core/TextDoc.js'
+import {entries, fromEntries} from '#/core/util/Objects.js'
+import {slugify} from '#/core/util/Slugs.js'
+import {
+  cloneElement,
+  type ComponentType,
+  type CSSProperties,
+  Fragment,
+  isValidElement,
+  type JSX,
+  type ReactElement,
+  type ReactNode,
+  type TableHTMLAttributes
+} from 'react'
+
+type Attributes = Record<string, unknown>
+type View = ComponentType<Attributes & {children?: ReactNode}> | ReactElement
+type TextAlign = CSSProperties['textAlign']
+type NoInferType<T> = [T][T extends unknown ? 0 : never]
+type RichTextBlockViews<Blocks extends object> = {
+  [K in keyof Blocks]?: ComponentType<Infer<Blocks[K]>>
+}
+interface RichTextBaseProps<Blocks extends object> {
+  doc: TextDoc<Blocks>
+  text?: ComponentType<{children: string | undefined}>
+}
+
+function textContent(doc: TextDoc): string {
+  return doc.reduce((text, node) => {
+    if (Node.isText(node)) return text + (node.text ?? '')
+    if ('content' in node && Array.isArray(node.content))
+      return text + textContent(node.content)
+    return text
+  }, '')
+}
+
+/** The node `withAnchors` places in a document where an anchor starts */
+const anchorNode = 'anchor'
+
+function isAnchor(mark: Mark): boolean {
+  return mark[Mark.type] === 'anchor'
+}
+
+/**
+ * Anchor marks name a place in the text, so links can jump to it. Each id is
+ * placed once, before the first text it marks: a mark over differently
+ * formatted text is stored on each of its text nodes.
+ */
+function withAnchors(doc: TextDoc, placed = new Set<string>()): TextDoc {
+  return doc.flatMap((node): Array<Node> => {
+    if (Node.isText(node)) {
+      const marks = node[TextNode.marks]
+      if (!marks?.some(isAnchor)) return [node]
+      const anchors = marks.flatMap(mark => {
+        const id = mark.id
+        if (!isAnchor(mark) || !id || placed.has(id)) return []
+        placed.add(id)
+        return [{[Node.type]: anchorNode, id}]
+      })
+      return [
+        ...anchors,
+        {...node, [TextNode.marks]: marks.filter(mark => !isAnchor(mark))}
+      ]
+    }
+    const content = Node.isElement(node) && node[ElementNode.content]
+    if (!content) return [node]
+    return [{...node, [ElementNode.content]: withAnchors(content, placed)}]
+  })
+}
+
+interface TableProps extends TableHTMLAttributes<HTMLTableElement> {}
+
+function Table({children, ...props}: TableProps) {
+  return (
+    <table {...props}>
+      <tbody>{children}</tbody>
+    </table>
+  )
+}
+
+function nodeElement(
+  type: string,
+  attributes: Attributes | undefined,
+  content?: TextDoc
+): ReactElement | undefined {
+  const element = defaultNodeElement(type, attributes, content)
+  if (!element || !attributes) return element
+  const dataAttributes = fromEntries(
+    entries(attributes).filter(([key]) => key.startsWith('data-'))
+  )
+  return cloneElement(element, dataAttributes)
+}
+
+function defaultNodeElement(
+  type: string,
+  attributes: Attributes | undefined,
+  content?: TextDoc
+): ReactElement | undefined {
+  const textAlign = textAlignAttribute(attributes?.textAlign)
+  const style = {
+    textAlign: textAlign === 'left' ? undefined : textAlign
+  }
+  switch (type) {
+    case 'heading': {
+      const level = attributes?.level
+      const Tag = headingTag(level)
+      const id =
+        attributes?._anchor ??
+        attributes?.id ??
+        (content ? slugify(textContent(content)) : undefined)
+      return <Tag style={style} id={typeof id === 'string' ? id : undefined} />
+    }
+    case 'paragraph':
+      return <p style={style} />
+    case 'bold':
+      return <b />
+    case 'italic':
+      return <i />
+    case 'bulletList':
+      return <ul style={style} />
+    case 'orderedList':
+      return <ol style={style} />
+    case 'listItem':
+      return <li />
+    case 'blockquote':
+      return <blockquote style={style} />
+    case 'horizontalRule':
+      return <hr />
+    case 'image': {
+      const src = attributes?.src
+      const alt = attributes?.alt
+      const title = attributes?.title
+      const width = attributes?.width
+      const height = attributes?.height
+      return (
+        <img
+          src={typeof src === 'string' ? src : undefined}
+          alt={typeof alt === 'string' ? alt : ''}
+          title={typeof title === 'string' ? title : undefined}
+          width={numberAttribute(width)}
+          height={numberAttribute(height)}
+        />
+      )
+    }
+    case 'hardBreak':
+      return <br />
+    case 'small':
+      return <small />
+    case 'subscript':
+      return <sub />
+    case 'superscript':
+      return <sup />
+    case 'link': {
+      const href = attributes?.href
+      const target = attributes?.target
+      const title = attributes?.title
+      const rel = attributes?.rel
+      return (
+        <a
+          href={typeof href === 'string' ? href : undefined}
+          target={typeof target === 'string' ? target : undefined}
+          title={typeof title === 'string' ? title : undefined}
+          rel={typeof rel === 'string' ? rel : undefined}
+        />
+      )
+    }
+    case 'table':
+      return <Table />
+    case 'tableCell':
+      return (
+        <td
+          colSpan={numberAttribute(attributes?.colspan)}
+          rowSpan={numberAttribute(attributes?.rowspan)}
+        />
+      )
+    case 'tableHeader':
+      return (
+        <th
+          colSpan={numberAttribute(attributes?.colspan)}
+          rowSpan={numberAttribute(attributes?.rowspan)}
+        />
+      )
+    case 'tableRow':
+      return <tr />
+  }
+}
+
+function headingTag(level: unknown): 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6' {
+  if (level === 2) return 'h2'
+  if (level === 3) return 'h3'
+  if (level === 4) return 'h4'
+  if (level === 5) return 'h5'
+  if (level === 6) return 'h6'
+  return 'h1'
+}
+
+function numberAttribute(value: unknown) {
+  if (typeof value === 'number') return value
+  if (typeof value === 'string') return Number(value)
+}
+
+function textAlignAttribute(value: unknown): TextAlign | undefined {
+  if (typeof value !== 'string') return
+  if (
+    value === 'center' ||
+    value === 'end' ||
+    value === 'justify' ||
+    value === 'left' ||
+    value === 'match-parent' ||
+    value === 'right' ||
+    value === 'start'
+  )
+    return value
+}
+
+function isComponentView(
+  view: View | undefined
+): view is ComponentType<Attributes & {children?: ReactNode}> {
+  return Boolean(view) && !isValidElement(view)
+}
+
+interface RichTextNodeViewProps {
+  views: Record<string, View | undefined>
+  node: Node
+}
+
+function renderMarks(
+  content: ReactNode,
+  marks: Array<Mark> | undefined,
+  views: Record<string, View | undefined>
+): ReactNode {
+  return (marks ?? []).reduce((children, mark) => {
+    const element = nodeElement(mark[Mark.type], mark)
+    if (!element?.type) return children
+    const View = views[String(element.type)]
+    if (isComponentView(View)) {
+      const Component = View
+      return <Component {...element.props}>{children}</Component>
+    }
+    const view = View ?? element
+    return (
+      <view.type {...element.props} {...(view.props as Attributes)}>
+        {children}
+      </view.type>
+    )
+  }, content)
+}
+
+function RichTextNodeView({views, node}: RichTextNodeViewProps) {
+  if (Node.isText(node)) {
+    const {[TextNode.text]: text, [TextNode.marks]: marks} = node
+    const TextView = views.text
+    const content: ReactNode =
+      typeof TextView === 'function' ? (
+        <TextView>{text}</TextView>
+      ) : (
+        (text ?? '')
+      )
+    return renderMarks(content, marks, views)
+  }
+  if (Node.isElement(node)) {
+    const {
+      [Node.type]: type,
+      [ElementNode.content]: content,
+      marks,
+      ...attrs
+    } = node
+    if (type === anchorNode) {
+      const id = typeof attrs.id === 'string' ? attrs.id : undefined
+      // React's types leave out `name` as it is obsolete in HTML, some
+      // older scripts still find anchors by it
+      const anchor: Record<string, string | undefined> = {id, name: id}
+      return <a {...anchor} />
+    }
+    const element = nodeElement(type, attrs, content)
+    const View =
+      type === 'table'
+        ? views.table
+        : element?.type
+          ? views[String(element.type)]
+          : undefined
+    const inner =
+      content?.map((node: Node, i: number) => (
+        <RichTextNodeView key={i} views={views} node={node} />
+      )) ?? null
+    if (isComponentView(View)) {
+      const Component = View
+      return renderMarks(
+        <Component {...element?.props}>{inner}</Component>,
+        marks,
+        views
+      )
+    }
+    const el = View ?? element ?? {type: Fragment, props: {}}
+    return renderMarks(
+      <el.type {...element?.props} {...(el.props as Attributes)}>
+        {inner}
+      </el.type>,
+      marks,
+      views
+    )
+  }
+  if (Node.isBlock(node)) {
+    const {[Node.type]: type, [BlockNode.id]: id, ...attrs} = node
+    const View = views[type]
+    if (!isComponentView(View)) return null
+    const Component = View
+    return <Component {...attrs} />
+  }
+}
+
+interface RichTextElementViews {
+  h1?: ComponentType<JSX.IntrinsicElements['h1']> | ReactElement
+  h2?: ComponentType<JSX.IntrinsicElements['h2']> | ReactElement
+  h3?: ComponentType<JSX.IntrinsicElements['h3']> | ReactElement
+  h4?: ComponentType<JSX.IntrinsicElements['h4']> | ReactElement
+  h5?: ComponentType<JSX.IntrinsicElements['h5']> | ReactElement
+  h6?: ComponentType<JSX.IntrinsicElements['h6']> | ReactElement
+  p?: ComponentType<JSX.IntrinsicElements['p']> | ReactElement
+  b?: ComponentType<JSX.IntrinsicElements['b']> | ReactElement
+  i?: ComponentType<JSX.IntrinsicElements['i']> | ReactElement
+  ul?: ComponentType<JSX.IntrinsicElements['ul']> | ReactElement
+  ol?: ComponentType<JSX.IntrinsicElements['ol']> | ReactElement
+  li?: ComponentType<JSX.IntrinsicElements['li']> | ReactElement
+  blockquote?: ComponentType<JSX.IntrinsicElements['blockquote']> | ReactElement
+  hr?: ComponentType<JSX.IntrinsicElements['hr']> | ReactElement
+  img?: ComponentType<JSX.IntrinsicElements['img']> | ReactElement
+  br?: ComponentType<JSX.IntrinsicElements['br']> | ReactElement
+  small?: ComponentType<JSX.IntrinsicElements['small']> | ReactElement
+  sub?: ComponentType<JSX.IntrinsicElements['sub']> | ReactElement
+  sup?: ComponentType<JSX.IntrinsicElements['sup']> | ReactElement
+  a?: ComponentType<JSX.IntrinsicElements['a']> | ReactElement
+  table?: ComponentType<JSX.IntrinsicElements['table']> | ReactElement
+  td?: ComponentType<JSX.IntrinsicElements['td']> | ReactElement
+  th?: ComponentType<JSX.IntrinsicElements['th']> | ReactElement
+  tr?: ComponentType<JSX.IntrinsicElements['tr']> | ReactElement
+}
+
+export type RichTextProps<Blocks extends object = {}> =
+  RichTextBaseProps<Blocks> & RichTextElementViews & RichTextBlockViews<Blocks>
+
+type RichTextComponentProps<Blocks extends object> = RichTextBaseProps<Blocks> &
+  RichTextElementViews &
+  RichTextBlockViews<NoInferType<Blocks>>
+
+export function RichText<Blocks extends object = {}>(
+  props: RichTextComponentProps<Blocks>
+): ReactElement | null
+export function RichText<Blocks extends object = {}>({
+  doc,
+  ...views
+}: RichTextProps<Blocks>) {
+  if (!Array.isArray(doc)) return null
+  return (
+    <Fragment>
+      {withAnchors(doc).map((node, i) => {
+        return (
+          <RichTextNodeView
+            key={i}
+            views={views as Record<string, View | undefined>}
+            node={node}
+          />
+        )
+      })}
+    </Fragment>
+  )
+}

@@ -1,0 +1,15 @@
+.CheckboxGroup {
+  color: var(--alinea-fg);
+}
+
+.CheckboxGroup-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.571rem;
+
+  &[data-orientation='horizontal'] {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0.571rem 1.143rem;
+  }
+}

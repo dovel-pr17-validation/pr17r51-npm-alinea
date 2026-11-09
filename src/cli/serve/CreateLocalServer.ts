@@ -1,0 +1,437 @@
+import type {Handler} from '#/backend/Handler.js'
+import {router} from '#/backend/router/Router.js'
+import type {CMS} from '#/core/CMS.js'
+import {developmentKeyHeader} from '#/core/Connection.js'
+import type {LocalStore} from '#/core/db/LocalStore.js'
+import {Config} from '#/core/Config.js'
+import {HttpError} from '#/core/HttpError.js'
+import {type Trigger, trigger} from '#/core/Trigger.js'
+import type {User} from '#/core/User.js'
+import {MediaLocation} from '#/core/media/MediaLocation.js'
+import {assertUploadSize} from '#/core/media/UploadLimits.js'
+import {keys} from '#/core/util/Objects.js'
+import {ReadableStream, Request, Response} from '@alinea/iso'
+import type {BuildOptions, BuildResult, OutputFile} from 'esbuild'
+import fs from 'node:fs'
+import path from 'node:path'
+import {buildEmitter} from '../build/BuildEmitter.js'
+import {contentType} from '../util/ContentType.js'
+import {ignorePlugin} from '../util/IgnorePlugin.js'
+import {publicDefines} from '../util/PublicDefines.js'
+import {reportFatal} from '../util/Report.js'
+import {viewsPlugin} from '../util/ViewsPlugin.js'
+import {createDevMcp} from './mcp/DevMcp.js'
+import type {ServeContext} from './ServeContext.js'
+
+type BuildDetails = Map<string, OutputFile>
+
+function buildFiles(outdir: string, result: BuildResult) {
+  return new Map(
+    result.outputFiles!.map(file => {
+      return [
+        file.path.slice(outdir.length).replace(/\\/g, '/').toLowerCase(),
+        file
+      ]
+    })
+  )
+}
+
+export function createLocalServer(
+  {
+    cmd,
+    configLocation,
+    rootDir,
+    staticDir,
+    alineaDev,
+    buildOptions,
+    production,
+    liveReload,
+    buildId,
+    apiKey
+  }: ServeContext,
+  cms: CMS,
+  configFingerprint: string,
+  handleApi: Handler,
+  user: User,
+  db: LocalStore
+): {
+  close(): void
+  handle(input: Request): Promise<Response>
+} {
+  function devHandler(request: Request) {
+    return handleApi(request, {
+      isDev: true,
+      handlerUrl: new URL(request.url.split('?')[0]),
+      apiKey
+    })
+  }
+  // Coding agents edit content through MCP, only while developing locally
+  const handleMcp =
+    cmd === 'dev'
+      ? createDevMcp({
+          config: cms.config,
+          db,
+          rootDir,
+          user,
+          apiKey,
+          handleApi: devHandler
+        })
+      : undefined
+  const devDir = path.join(staticDir, 'dev')
+  const publicDir = path.join(rootDir, cms.config.publicDir ?? 'public')
+  const adminPath = Config.adminPath(cms.config)
+  const getPath = (url: URL) => {
+    if (url.pathname === adminPath || url.pathname.startsWith(`${adminPath}/`))
+      return url.pathname.slice(adminPath.length)
+    return url.pathname
+  }
+  const matcher = router.matcher(getPath)
+  const entryPoints = {
+    entry: 'alinea/cli/static/dashboard/dev',
+    config: '#alinea/entry'
+  }
+  const tsconfigLocation = path.join(rootDir, 'tsconfig.json')
+  const tsconfig = fs.existsSync(tsconfigLocation)
+    ? tsconfigLocation
+    : undefined
+  let currentBuild: Trigger<BuildDetails> = trigger<BuildDetails>()
+  let initial = true
+  const plugins = buildOptions?.plugins || []
+  plugins.push(viewsPlugin(rootDir, cms), ignorePlugin)
+  const alias: Record<string, string> = {
+    'alinea/next': 'alinea/core',
+    '#alinea/config': configLocation,
+    '#alinea/entry': `data:text/javascript,
+        export * from '#alinea/config'
+        export * from '${viewsPlugin.entry}'
+      `
+  }
+  const config = {
+    format: 'esm',
+    target: 'esnext',
+    treeShaking: true,
+    minify: true,
+    splitting: true,
+    sourcemap: true,
+    outdir: devDir,
+    bundle: true,
+    absWorkingDir: rootDir,
+    entryPoints,
+    platform: 'browser',
+    ...buildOptions,
+    plugins,
+    alias,
+    external: ['@alinea/generated'],
+    inject: ['alinea/cli/util/WarnPublicEnv'],
+    define: {
+      'process.env.NODE_ENV': production ? '"production"' : '"development"',
+      'process.env.ALINEA_DEV': alineaDev ? 'true' : 'false',
+      'process.env.ALINEA_USER': JSON.stringify(JSON.stringify(user)),
+      'process.env.ALINEA_FORCE_AUTH': process.env.ALINEA_CLOUD_URL
+        ? 'true'
+        : 'false',
+      'process.env.ALINEA_BUILD_ID': JSON.stringify(buildId),
+      'process.env.ALINEA_CONFIG_FINGERPRINT':
+        JSON.stringify(configFingerprint),
+      ...publicDefines(process.env)
+    },
+    logOverride: {
+      'ignored-bare-import': 'silent'
+    },
+    tsconfig,
+    write: false
+  } satisfies BuildOptions
+
+  const builder = buildEmitter(config)
+  let closed = false
+  ;(async () => {
+    for await (const {type, result} of builder) {
+      if (type === 'start') {
+        if (initial) initial = false
+        else currentBuild = trigger<BuildDetails>()
+      } else {
+        if (result.errors.length) {
+          reportFatal('Building Alinea dashboard failed')
+        } else {
+          currentBuild.resolve(buildFiles(devDir, result))
+          // A superseded server's watcher may still finish a build; only the
+          // current server announces revisions, or the dashboard would load
+          // one revision and immediately replace it with the next.
+          if (!closed)
+            liveReload.reload(
+              alineaDev ? 'reload' : 'refresh',
+              configFingerprint
+            )
+        }
+      }
+    }
+  })()
+
+  async function serveBrowserBuild(
+    request: Request
+  ): Promise<Response | undefined> {
+    const result = await currentBuild
+    if (!result) return new Response('Build failed', {status: 500})
+    const url = new URL(request.url)
+    const fileName = getPath(url).toLowerCase()
+    const file = result.get(fileName)
+    if (!file) return undefined
+    const ifNoneMatch = request.headers.get('if-none-match')
+    const etag = `"${file.hash}"`
+    if (ifNoneMatch && ifNoneMatch === etag)
+      return new Response(undefined, {status: 304})
+    const extension = path.extname(fileName)
+    return new Response(file.contents as BodyInit, {
+      headers: {
+        'content-type': contentType(extension),
+        etag
+      }
+    })
+  }
+
+  async function servePublicFile(
+    request: Request
+  ): Promise<Response | undefined> {
+    if (request.method !== 'GET' && request.method !== 'HEAD') return
+    const pathname = decodeURIComponent(new URL(request.url).pathname)
+    const location = path.resolve(publicDir, pathname.replace(/^[/\\]+/, ''))
+    const relative = path.relative(publicDir, location)
+    if (
+      relative === '..' ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    )
+      return
+    try {
+      const stat = await fs.promises.stat(location)
+      if (!stat.isFile()) return
+      const body =
+        request.method === 'HEAD'
+          ? undefined
+          : await fs.promises.readFile(location)
+      return new Response(body as BodyInit | undefined, {
+        headers: {
+          'content-length': String(stat.size),
+          'content-type': contentType(path.extname(location))
+        }
+      })
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT')
+        return
+      throw error
+    }
+  }
+
+  const httpRouter = router(
+    // Matched on the full pathname: the Next dev rewrite forwards adminPath
+    // requests from any network interface, those must never reach MCP
+    handleMcp &&
+      router
+        .matcher()
+        .all('/mcp')
+        .map(({request}) => handleMcp(request)),
+    matcher.get('/~dev').map((): Response => {
+      let heartbeat: ReturnType<typeof setInterval> | undefined
+      let unregister: (() => void) | undefined
+      const stream = new ReadableStream<string>({
+        start(controller) {
+          // Proxies such as Next.js rewrites give up on requests that are
+          // idle for 30s: send headers right away and keep the stream active
+          controller.enqueue(': connected\n\n')
+          heartbeat = setInterval(
+            () => controller.enqueue(': ping\n\n'),
+            15_000
+          )
+          unregister = liveReload.register({
+            write: v => controller.enqueue(v),
+            close() {
+              clearInterval(heartbeat)
+              controller.close()
+            }
+          })
+        },
+        cancel() {
+          clearInterval(heartbeat)
+          unregister?.()
+        }
+      })
+      return new Response(stream, {
+        headers: {
+          'content-type': 'text/event-stream',
+          // no-transform keeps proxies (Next compresses rewrites) from
+          // buffering events
+          'cache-control': 'no-cache, no-transform',
+          'access-control-allow-origin': '*',
+          connection: 'keep-alive'
+        }
+      })
+    }),
+    router.queryMatcher.all('/upload').map(({request}) => {
+      if (!isAllowedUploadOrigin(request))
+        return new Response('Forbidden', {status: 403})
+    }),
+    router.queryMatcher.options('/upload').map(({request}) => {
+      return new Response(undefined, {
+        status: 204,
+        headers: uploadCorsHeaders(request)
+      })
+    }),
+    router.queryMatcher.post('/upload').map(async ({request, url}) => {
+      try {
+        if (!request.body)
+          return new Response('No body', {
+            status: 400,
+            headers: uploadCorsHeaders(request)
+          })
+        const file = url.searchParams.get('file') ?? ''
+        const maxUploadSize = cms.config.maxUploadSize
+        const contentLength = request.headers.get('content-length')
+        assertUploadSize(
+          file,
+          contentLength ? Number(contentLength) : undefined,
+          maxUploadSize
+        )
+        // Uploads only write into a workspace's media dir
+        const location = path.join(rootDir, file)
+        const inMediaDir = keys(cms.config.workspaces).some(workspace => {
+          const dir = path.join(
+            rootDir,
+            MediaLocation.directory(cms.config, workspace)
+          )
+          const relative = path.relative(dir, location)
+          return (
+            relative !== '' &&
+            !path.isAbsolute(relative) &&
+            !relative.split(path.sep).includes('..')
+          )
+        })
+        if (!inMediaDir)
+          return new Response('Invalid upload location', {
+            status: 400,
+            headers: uploadCorsHeaders(request)
+          })
+        await fs.promises.mkdir(path.dirname(location), {recursive: true})
+        await writeUploadFile(location, request.body, maxUploadSize)
+        return new Response('Upload ok', {headers: uploadCorsHeaders(request)})
+      } catch (error) {
+        if (error instanceof HttpError)
+          return new Response(error.message, {
+            status: error.code,
+            headers: uploadCorsHeaders(request)
+          })
+        throw error
+      }
+    }),
+    router.compress(
+      matcher.all('/file/*').map(({request, params}) => {
+        if (request.method !== 'GET' && request.method !== 'HEAD') return
+        const url = new URL(request.url)
+        url.pathname = '/api'
+        url.search = new URLSearchParams({
+          file: String(params.wild)
+        }).toString()
+        return devHandler(new Request(url, request))
+      }),
+      matcher.all('/api').map(async ({url, request}) => {
+        return devHandler(request)
+      }),
+      matcher.get('/').map(({url}): Response => {
+        const handlerUrl = `${url.protocol}//${url.host}`
+        const path = url.pathname.endsWith('/')
+          ? url.pathname
+          : `${url.pathname}/`
+        return new Response(
+          `<!DOCTYPE html>
+          <html data-alinea-theme>
+          <meta charset="utf-8" />
+          <base href="${path}" />
+          <link rel="icon" href="data:," />
+          <link href="config.css" rel="stylesheet" crossorigin />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+          <meta name="handshake_url" value="${handlerUrl}/api?auth=handshake" />
+          <meta name="redirect_url" value="${handlerUrl}/api?auth=login" />
+          <body>
+            <script type="module" src="entry.js?${buildId}"></script>
+          </body>`,
+          {headers: {'content-type': 'text/html'}}
+        )
+      }),
+      serveBrowserBuild,
+      servePublicFile
+    )
+  ).notFound(() => new Response('Not found', {status: 404}))
+
+  function uploadCorsHeaders(request: Request) {
+    const origin = request.headers.get('origin')
+    return {
+      ...(origin ? {'access-control-allow-origin': origin} : {}),
+      'access-control-allow-methods': 'POST, OPTIONS',
+      'access-control-allow-headers':
+        request.headers.get('access-control-request-headers') ?? 'content-type',
+      vary: 'Origin, Access-Control-Request-Headers'
+    }
+  }
+
+  function isAllowedUploadOrigin(request: Request) {
+    const origin = request.headers.get('origin')
+    // Browsers send an Origin, other callers (MCP uploads) the dev key
+    if (!origin) return request.headers.get(developmentKeyHeader) === apiKey
+    try {
+      return new URL(origin).hostname === new URL(request.url).hostname
+    } catch {
+      return false
+    }
+  }
+
+  return {
+    close() {
+      closed = true
+      builder.return()
+    },
+    async handle(request: Request) {
+      return (await httpRouter.handle(request))!
+    }
+  }
+}
+
+async function writeUploadFile(
+  file: string,
+  body: ReadableStream<Uint8Array>,
+  maxUploadSize: number | undefined
+) {
+  const writer = fs.createWriteStream(file)
+  const reader = body.getReader()
+  let size = 0
+  try {
+    while (true) {
+      const {done, value} = await reader.read()
+      if (done) break
+      const chunk = value
+      size += chunk.byteLength
+      assertUploadSize(file, size, maxUploadSize)
+      if (!writer.write(chunk)) await waitForDrain(writer)
+    }
+    await closeWriter(writer)
+  } catch (error) {
+    writer.destroy()
+    await fs.promises.rm(file, {force: true}).catch(() => {})
+    throw error
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+function waitForDrain(writer: fs.WriteStream) {
+  return new Promise<void>((resolve, reject) => {
+    writer.once('drain', resolve)
+    writer.once('error', reject)
+  })
+}
+
+function closeWriter(writer: fs.WriteStream) {
+  return new Promise<void>((resolve, reject) => {
+    writer.once('finish', resolve)
+    writer.once('error', reject)
+    writer.end()
+  })
+}

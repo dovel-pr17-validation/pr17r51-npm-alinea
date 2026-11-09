@@ -1,0 +1,126 @@
+import { Config, Field } from 'alinea'
+// Loads the table commands' type augmentation used by the toolbar below.
+import type {} from '@tiptap/extension-table'
+import {
+  alignment,
+  formatting,
+  headings,
+  images,
+  inserts,
+  links,
+  lists,
+  quotes,
+  tables
+} from 'alinea/field/richtext'
+
+export const RichTextFields = Config.document('Rich text fields', {
+  fields: {
+    richText: Field.richText('Rich text'),
+    withInitial: Field.richText('With initial value', {
+      searchable: true,
+      required: true,
+      initialValue: [
+        {
+          _type: 'heading',
+          content: [
+            {
+              _type: 'text',
+              text: 'Initial heading'
+            }
+          ],
+          level: 2
+        },
+        {
+          _type: 'paragraph',
+          content: [
+            {
+              _type: 'text',
+              text: 'This is a paragraph generated from the initial value.'
+            }
+          ]
+        }
+      ]
+    }),
+    nested: Field.richText('With nested blocks', {
+      searchable: true,
+      schema: {
+        Inner: Config.type('Inner', {
+          fields: {
+            checkbox1: Field.check('Checkbox 1'),
+            checkbox2: Field.check('Checkbox 2'),
+            title: Field.text('Title'),
+            content: Field.richText('Inner rich text', {
+              searchable: true
+            })
+          }
+        }),
+
+        NestLayout: Config.type('Nested layout fields', {
+          fields: {
+            object: Field.object('Object field', {
+              fields: {
+                fieldA: Field.text('Field A', {width: 0.5}),
+                fieldB: Field.text('Field B', {width: 0.5})
+              }
+            }),
+            ...Field.tabs(
+              Field.tab('Tab A', {
+                fields: {tabA: Field.text('Tab A')}
+              }),
+              Field.tab('Tab B', {
+                fields: {tabB: Field.text('Tab B')}
+              })
+            )
+          }
+        })
+      }
+    }),
+    linkCondition: Field.richText('With link condition', {
+      link: {
+        condition: {_type: 'BasicFields'},
+        enableNavigation: true
+      }
+    }),
+    table: Field.richText('With table support', {
+      enableTables: true
+    }),
+    image: Field.richText('With image support', {
+      enableImages: true
+    }),
+    tableCustom: Field.richText('With custom toolbar', {
+      enableImages: true,
+      enableTables: true,
+      extensions: extensions => ({
+        ...extensions,
+        Table: extensions.Table.configure({resizable: true})
+      }),
+      toolbar: {
+        headings,
+        tables: {
+          ...tables,
+          items(ctx) {
+            const items = tables.items(ctx)
+            if (ctx.editor.isActive('table')) return items
+            return {
+              quickInsert: {
+                label: 'Quick 2x4 table',
+                onSelect: ({exec}) =>
+                  exec()
+                    .insertTable({rows: 2, cols: 4, withHeaderRow: false})
+                    .run()
+              },
+              ...items
+            }
+          }
+        },
+        formatting,
+        alignment,
+        lists,
+        links,
+        images,
+        quotes,
+        inserts
+      }
+    })
+  }
+})

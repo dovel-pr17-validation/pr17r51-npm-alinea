@@ -1,0 +1,41 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+
+.title {
+  padding-bottom: 2px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--web-foreground);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.link {
+  color: var(--web-foreground-muted);
+  transition: color 0.15s ease-out;
+
+  &:hover {
+    color: var(--web-foreground);
+  }
+
+  &:focus-visible {
+    color: var(--web-foreground);
+    border-radius: 4px;
+    outline: 2px solid var(--web-accent);
+    outline-offset: 2px;
+  }
+
+  &.is-active {
+    color: var(--web-accent);
+    font-weight: 500;
+  }
+}

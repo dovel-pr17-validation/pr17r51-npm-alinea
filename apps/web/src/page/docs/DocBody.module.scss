@@ -1,0 +1,169 @@
+@use '@/style' as *;
+
+// Spacing lives on the flow elements, not on the blocks they render: vertical
+// margins collapse, so the gap between two elements is the larger of the two
+// and a heading stays close to whatever follows it.
+
+@mixin heading($level) {
+  margin: var(--web-docs-space-#{$level}) 0
+    var(--web-docs-space-#{$level}-after);
+  font: var(--web-docs-font-#{$level});
+  letter-spacing: var(--web-docs-tracking-heading);
+  color: var(--web-foreground);
+  scroll-margin-top: calc(
+    var(--web-docs-offset, var(--web-header-height)) + 24px
+  );
+
+  &:first-child {
+    margin-top: 0;
+  }
+}
+
+.root {
+  min-width: 0;
+  font: var(--web-docs-font-body);
+  color: var(--web-foreground-faded);
+
+  // On a wide page text keeps its measure, catalogs use the full width
+  &.is-wide :is(.p, .h2, .h3, .h4, .list, .blockquote, .block:not(.is-wide)) {
+    max-width: 720px;
+  }
+}
+
+.lead {
+  font: var(--web-docs-font-lead);
+  color: var(--web-foreground-faded);
+
+  & + & {
+    margin-top: var(--web-docs-space-flow);
+  }
+}
+
+.p {
+  margin: 0 0 var(--web-docs-space-flow);
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.h2 {
+  @include heading(h2);
+}
+
+.h3 {
+  @include heading(h3);
+}
+
+.h4 {
+  @include heading(h4);
+}
+
+// A subheading right under its heading stays with it
+.h2 + .h3,
+.h2 + .h4,
+.h3 + .h4 {
+  margin-top: 0;
+}
+
+// Code, notices, images and other boxed blocks
+.block {
+  margin: var(--web-docs-space-block) 0;
+
+  &:first-child {
+    margin-top: 0;
+  }
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+
+  .h2 + &,
+  .h3 + &,
+  .h4 + & {
+    margin-top: 0;
+  }
+}
+
+.anchor {
+  color: inherit;
+  transition: color 0.15s ease-out;
+
+  &:hover {
+    color: var(--web-accent);
+  }
+}
+
+.link {
+  color: var(--web-accent);
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--web-accent) 30%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  transition: color 0.15s ease-out;
+
+  &:hover {
+    color: var(--web-accent-strong);
+    text-decoration-color: currentColor;
+  }
+}
+
+.list {
+  margin: 0 0 var(--web-docs-space-flow);
+  padding-left: 22px;
+  list-style-type: disc;
+
+  &.is-ordered {
+    list-style-type: decimal;
+  }
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.listItem {
+  padding-left: 4px;
+
+  &::marker {
+    color: var(--web-foreground-muted);
+  }
+
+  & + & {
+    margin-top: var(--web-docs-space-list);
+  }
+
+  // Nested lists and follow-up paragraphs keep the list item rhythm
+  .list {
+    list-style-type: circle;
+  }
+
+  .list.is-ordered {
+    list-style-type: lower-alpha;
+  }
+
+  .list,
+  .p {
+    margin: var(--web-docs-space-list) 0 0;
+
+    &:first-child {
+      margin-top: 0;
+    }
+  }
+}
+
+.blockquote {
+  margin: 0 0 var(--web-docs-space-flow);
+  padding: 2px 0 2px 18px;
+  border-left: 2px solid var(--web-outline-strong);
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+// The number of a step heading
+.step {
+  color: var(--web-foreground-muted);
+}

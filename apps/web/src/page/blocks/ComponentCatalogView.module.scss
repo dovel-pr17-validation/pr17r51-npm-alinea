@@ -1,0 +1,36 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 56px;
+
+  &-import {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 20px;
+    border-radius: var(--web-docs-radius);
+    background: var(--web-code-background);
+    color: var(--web-code-foreground);
+
+    &-code {
+      min-width: 0;
+      overflow-x: auto;
+      white-space: nowrap;
+      scrollbar-width: none;
+      font: var(--web-docs-font-code);
+
+      &::-webkit-scrollbar {
+        display: none;
+      }
+    }
+
+    &-keyword {
+      color: var(--web-code-keyword);
+    }
+
+    &-string {
+      color: var(--web-code-string);
+    }
+  }
+}

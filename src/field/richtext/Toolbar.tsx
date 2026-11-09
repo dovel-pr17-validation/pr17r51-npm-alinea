@@ -1,0 +1,411 @@
+import {
+  IcAlignCenter,
+  IcAlignJustify,
+  IcAlignLeft,
+  IcAlignRight,
+  IcRoundAnchor,
+  IcRoundFormatBold,
+  IcRoundFormatClear,
+  IcRoundFormatItalic,
+  IcRoundFormatListBulleted,
+  IcRoundFormatListNumbered,
+  IcRoundHorizontalRule,
+  IcRoundImage,
+  IcRoundLink,
+  IcRoundQuote,
+  IcRoundSubscript,
+  IcRoundSuperscript,
+  IcRoundTextFields,
+  IcRoundUnfoldMore,
+  MaterialSymbolsFormatInkHighlighterRounded,
+  TableDelete,
+  TableDeleteColumn,
+  TableDeleteRow,
+  TableHeaderCell,
+  TableHeaderColumn,
+  TableHeaderRow,
+  TableInsert,
+  TableInsertColumnAfter,
+  TableInsertColumnBefore,
+  TableInsertRowAfter,
+  TableInsertRowBefore,
+  TableMergeCells,
+  TableSplitCell
+} from '#/dashboard/icons.js'
+import type {Editor} from '@tiptap/react'
+import type {ComponentType, ReactElement, ReactNode} from 'react'
+import type {PickTextLinkFunc} from './PickTextLink.js'
+import type {PickRichTextImageFunc} from './PickTextLink.js'
+import {currentAnchor} from './extensions/Anchor.js'
+
+export interface RichTextCommand {
+  (): ReturnType<Editor['chain']>
+}
+
+type IconType = ComponentType | ReactElement
+
+export interface ToolbarButton {
+  icon?: (ctx: RichTextToolbarContext) => IconType
+  label?: ReactNode | ((ctx: RichTextToolbarContext) => ReactNode)
+  title?: string
+  disabled?: (ctx: RichTextToolbarContext) => boolean
+  active?: (ctx: RichTextToolbarContext) => boolean
+  onSelect: (ctx: RichTextToolbarContext) => void
+}
+
+export interface ToolbarMenu {
+  icon?: (ctx: RichTextToolbarContext) => IconType
+  label?: ReactNode | ((ctx: RichTextToolbarContext) => ReactNode)
+  /** Marks the menu trigger, eg. while a value other than the default applies */
+  active?: (ctx: RichTextToolbarContext) => boolean
+  items: ToolbarConfig | ((ctx: RichTextToolbarContext) => ToolbarConfig)
+}
+
+export interface ToolbarGroup {
+  group: ToolbarConfig | ((ctx: RichTextToolbarContext) => ToolbarConfig)
+}
+
+export interface ToolbarConfig {
+  [name: string]: ToolbarMenu | ToolbarButton | ToolbarGroup
+}
+
+export interface RichTextToolbarContext {
+  editor: Editor
+  focusToggle: (target: EventTarget | null) => void
+  pickImage: PickRichTextImageFunc
+  pickLink: PickTextLinkFunc
+  enableImages?: boolean
+  enableTables?: boolean
+  exec: RichTextCommand
+  handleImage: () => void
+  handleLink: () => void
+  handleAnchor: () => void
+  toolbar: ToolbarConfig
+}
+
+const styleLabels = {
+  paragraph: 'Normal text',
+  h1: 'Heading 1',
+  h2: 'Heading 2',
+  h3: 'Heading 3',
+  h4: 'Heading 4',
+  h5: 'Heading 5'
+}
+
+const headingLevels = [1, 2, 3, 4, 5] as const
+
+export const headings = {
+  icon: () => <IcRoundUnfoldMore />,
+  label({editor}) {
+    const level = headingLevels.find(level =>
+      editor.isActive('heading', {level})
+    )
+    return level ? styleLabels[`h${level}`] : styleLabels.paragraph
+  },
+  active: ({editor}) => editor.isActive('heading'),
+  items: {
+    styles: {
+      group: {
+        normal: {
+          label: () => <p>Normal text</p>,
+          onSelect: ({exec}) => exec().clearNodes().run()
+        },
+        h1: {
+          label: () => <h1>Heading 1</h1>,
+          active: ({editor}) => editor.isActive('heading', {level: 1}),
+          onSelect: ({exec}) => exec().setHeading({level: 1}).run()
+        },
+        h2: {
+          label: () => <h2>Heading 2</h2>,
+          active: ({editor}) => editor.isActive('heading', {level: 2}),
+          onSelect: ({exec}) => exec().setHeading({level: 2}).run()
+        },
+        h3: {
+          label: () => <h3>Heading 3</h3>,
+          active: ({editor}) => editor.isActive('heading', {level: 3}),
+          onSelect: ({exec}) => exec().setHeading({level: 3}).run()
+        },
+        h4: {
+          label: () => <h4>Heading 4</h4>,
+          active: ({editor}) => editor.isActive('heading', {level: 4}),
+          onSelect: ({exec}) => exec().setHeading({level: 4}).run()
+        },
+        h5: {
+          label: () => <h5>Heading 5</h5>,
+          active: ({editor}) => editor.isActive('heading', {level: 5}),
+          onSelect: ({exec}) => exec().setHeading({level: 5}).run()
+        }
+      }
+    }
+  }
+} satisfies ToolbarMenu
+
+export const tables = {
+  icon: () => <IcRoundUnfoldMore />,
+  label: 'Table',
+  items(ctx) {
+    const {editor, exec} = ctx
+    if (!editor.isActive('table')) {
+      return {
+        insertTable: {
+          icon: () => <TableInsert />,
+          label: 'Insert table',
+          onSelect: () =>
+            exec().insertTable({rows: 3, cols: 3, withHeaderRow: true}).run()
+        }
+      }
+    }
+    const activeMenu: ToolbarConfig = {
+      cells: {
+        group: {
+          mergeCells: {
+            icon: () => <TableMergeCells />,
+            label: 'Merge cells',
+            disabled: () => !editor.can().mergeCells(),
+            onSelect: () => exec().mergeCells().run()
+          },
+          splitCell: {
+            icon: () => <TableSplitCell />,
+            label: 'Split cell',
+            disabled: () => !editor.can().splitCell(),
+            onSelect: () => exec().splitCell().run()
+          },
+          headerCell: {
+            icon: () => <TableHeaderCell />,
+            label: 'Toggle header cell',
+            onSelect: () => exec().toggleHeaderCell().run()
+          }
+        }
+      },
+      structure: {
+        group: {
+          addColumnBefore: {
+            icon: () => <TableInsertColumnBefore />,
+            label: 'Insert column before',
+            onSelect: () => exec().addColumnBefore().run()
+          },
+          addColumnAfter: {
+            icon: () => <TableInsertColumnAfter />,
+            label: 'Insert column after',
+            onSelect: () => exec().addColumnAfter().run()
+          },
+          toggleHeaderColumn: {
+            icon: () => <TableHeaderColumn />,
+            label: 'Toggle header column',
+            onSelect: () => exec().toggleHeaderColumn().run()
+          },
+          deleteColumn: {
+            icon: () => <TableDeleteColumn />,
+            label: 'Delete column',
+            onSelect: () => exec().deleteColumn().run()
+          }
+        }
+      },
+      rows: {
+        group: {
+          addRowBefore: {
+            icon: () => <TableInsertRowBefore />,
+            label: 'Insert row before',
+            onSelect: () => exec().addRowBefore().run()
+          },
+          addRowAfter: {
+            icon: () => <TableInsertRowAfter />,
+            label: 'Insert row after',
+            onSelect: () => exec().addRowAfter().run()
+          },
+          toggleHeaderRow: {
+            icon: () => <TableHeaderRow />,
+            label: 'Toggle header row',
+            onSelect: () => exec().toggleHeaderRow().run()
+          },
+          deleteRow: {
+            icon: () => <TableDeleteRow />,
+            label: 'Delete row',
+            onSelect: () => exec().deleteRow().run()
+          }
+        }
+      },
+      danger: {
+        group: {
+          deleteTable: {
+            icon: () => <TableDelete />,
+            label: 'Delete table',
+            onSelect: () => exec().deleteTable().run()
+          }
+        }
+      }
+    }
+    return activeMenu
+  }
+} satisfies ToolbarMenu
+
+export const formatting = {
+  group: {
+    bold: {
+      icon: () => <IcRoundFormatBold />,
+      title: 'Bold',
+      active: ({editor}) => editor.isActive('bold'),
+      onSelect: ({exec}) => exec().toggleBold().run()
+    },
+    italic: {
+      icon: () => <IcRoundFormatItalic />,
+      title: 'Italic',
+      active: ({editor}) => editor.isActive('italic'),
+      onSelect: ({exec}) => exec().toggleItalic().run()
+    },
+    clear: {
+      icon: () => <IcRoundFormatClear />,
+      title: 'Clear format',
+      onSelect: ({exec}) => exec().unsetAllMarks().unsetTextAlign().run()
+    },
+    small: {
+      icon: () => <IcRoundTextFields />,
+      title: 'Small',
+      active: ({editor}) => editor.isActive('small'),
+      onSelect: ({exec}) => exec().toggleSmall().run()
+    },
+    subscript: {
+      icon: () => <IcRoundSubscript />,
+      title: 'Subscript',
+      active: ({editor}) => editor.isActive('subscript'),
+      onSelect: ({exec}) => exec().toggleSubscript().run()
+    },
+    superscript: {
+      icon: () => <IcRoundSuperscript />,
+      title: 'Superscript',
+      active: ({editor}) => editor.isActive('superscript'),
+      onSelect: ({exec}) => exec().toggleSuperscript().run()
+    },
+    highlight: {
+      icon: () => <MaterialSymbolsFormatInkHighlighterRounded />,
+      title: 'Highlight',
+      active: ({editor}) => editor.isActive('highlight'),
+      onSelect: ({exec}) => exec().toggleHighlight().run()
+    }
+  }
+} satisfies ToolbarGroup
+
+export const alignment = {
+  icon({editor}) {
+    if (editor.isActive({textAlign: 'center'})) return <IcAlignCenter />
+    if (editor.isActive({textAlign: 'right'})) return <IcAlignRight />
+    if (editor.isActive({textAlign: 'justify'})) return <IcAlignJustify />
+    return <IcAlignLeft />
+  },
+  // Left is the default alignment, it needs no active state
+  active: ({editor}) =>
+    (['center', 'right', 'justify'] as const).some(textAlign =>
+      editor.isActive({textAlign})
+    ),
+  items: {
+    left: {
+      icon: () => <IcAlignLeft />,
+      label: 'Left',
+      onSelect: ({exec}) => exec().setTextAlign('left').run()
+    },
+    center: {
+      icon: () => <IcAlignCenter />,
+      label: 'Center',
+      active: ({editor}) => editor.isActive({textAlign: 'center'}),
+      onSelect: ({exec}) => exec().setTextAlign('center').run()
+    },
+    right: {
+      icon: () => <IcAlignRight />,
+      label: 'Right',
+      active: ({editor}) => editor.isActive({textAlign: 'right'}),
+      onSelect: ({exec}) => exec().setTextAlign('right').run()
+    },
+    justify: {
+      icon: () => <IcAlignJustify />,
+      label: 'Justify',
+      active: ({editor}) => editor.isActive({textAlign: 'justify'}),
+      onSelect: ({exec}) => exec().setTextAlign('justify').run()
+    }
+  }
+} satisfies ToolbarMenu
+
+export const lists = {
+  group: {
+    bulletList: {
+      icon: () => <IcRoundFormatListBulleted />,
+      title: 'Bullet list',
+      active: ({editor}) => editor.isActive('bulletList'),
+      onSelect: ({exec}) => exec().toggleBulletList().run()
+    },
+    orderedList: {
+      icon: () => <IcRoundFormatListNumbered />,
+      title: 'Ordered list',
+      active: ({editor}) => editor.isActive('orderedList'),
+      onSelect: ({exec}) => exec().toggleOrderedList().run()
+    }
+  }
+} satisfies ToolbarGroup
+
+export const links = {
+  group: {
+    link: {
+      icon: () => <IcRoundLink />,
+      title: 'Link',
+      active: ({editor}) => editor.isActive('link'),
+      onSelect: ({handleLink}) => handleLink()
+    }
+  }
+} satisfies ToolbarGroup
+
+export const images = {
+  group: {
+    image: {
+      icon: () => <IcRoundImage />,
+      title: 'Image',
+      active: ({editor}) => editor.isActive('image'),
+      onSelect: ({handleImage}) => handleImage()
+    }
+  }
+} satisfies ToolbarGroup
+
+export const anchors = {
+  group: {
+    anchor: {
+      icon: () => <IcRoundAnchor />,
+      title: 'Anchor',
+      active: ({editor}) => currentAnchor(editor) !== undefined,
+      onSelect: ({handleAnchor}) => handleAnchor()
+    }
+  }
+} satisfies ToolbarGroup
+
+export const quotes = {
+  icon: () => <IcRoundQuote />,
+  title: 'Blockquote',
+  active: ({editor}) => editor.isActive('blockquote'),
+  onSelect: ({exec}) => exec().toggleBlockquote().run()
+} satisfies ToolbarButton
+
+export const inserts = {
+  icon: () => <IcRoundHorizontalRule />,
+  title: 'Horizontal rule',
+  onSelect: ({exec}) => exec().setHorizontalRule().run()
+} satisfies ToolbarButton
+
+export interface DefaultToolbarOptions {
+  enableImages?: boolean
+  enableTables?: boolean
+}
+
+export function defaultToolbar({
+  enableImages = false,
+  enableTables = false
+}: DefaultToolbarOptions = {}): ToolbarConfig {
+  return {
+    headings,
+    ...(enableTables ? {tables} : {}),
+    formatting,
+    alignment,
+    lists,
+    links,
+    anchors,
+    ...(enableImages ? {images} : {}),
+    quotes,
+    inserts
+  }
+}

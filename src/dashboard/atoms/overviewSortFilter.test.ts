@@ -1,0 +1,326 @@
+import '#test/react.js'
+import {Entry} from '#/core/Entry.js'
+import type {Order} from '#/core/Graph.js'
+import {createId} from '#/core/Id.js'
+import {getRoot} from '#/core/Internal.js'
+import {FileData, MediaFile, MediaLibrary} from '#/core/media/MediaTypes.js'
+import {LocalDB} from '#/database/LocalDB.js'
+import {Config} from '#/index.js'
+import {createDashboardStore} from '#test/DashboardFixture.js'
+import {Brand, Product, config} from '#test/overview.js'
+import type {OverviewFilter} from '#/core/Overview.js'
+import {expect, setSystemTime, test} from 'bun:test'
+import {atom} from 'jotai'
+import {createExplorerAtoms} from './explorer.js'
+import {
+  type OverviewParent,
+  overviewFilter,
+  overviewOrder,
+  pickedFilters,
+  resolveOverview,
+  sortedColumn
+} from './overview.js'
+import {syncAtom} from './graph.js'
+import {userPolicyReadyAtom} from './user.js'
+
+function rootParent(root: 'products' | 'media'): OverviewParent {
+  return {kind: 'root', data: getRoot(config.workspaces.main[root])}
+}
+
+test('without declared sorts the title and sortable columns sort', () => {
+  const products = resolveOverview(config, rootParent('products'))
+  expect(products.sorts.map(sort => sort.key)).toEqual([
+    'title',
+    'articleNumber',
+    'updated',
+    'author',
+    'brand',
+    'price'
+  ])
+  expect(products.filters).toEqual([])
+  expect(overviewOrder(products, {column: 'price', direction: 'desc'})).toEqual(
+    {desc: Product.price}
+  )
+})
+
+test('the media library declares its sorts and filters', () => {
+  const media = resolveOverview(config, rootParent('media'))
+  expect(media.sorts.map(sort => [sort.key, sort.label])).toEqual([
+    ['latest', 'Latest'],
+    ['title', 'Title'],
+    ['size', 'Size'],
+    ['dimensions', 'Dimensions'],
+    ['fileType', 'File type']
+  ])
+  expect(media.filters.map(filter => filter.key)).toEqual([
+    'show',
+    'usage',
+    'fileType'
+  ])
+  expect(overviewOrder(media, {column: 'title', direction: 'desc'})).toEqual({
+    desc: Entry.title
+  })
+  expect(
+    overviewOrder(media, {column: 'dimensions', direction: 'desc'})
+  ).toEqual([{desc: FileData.width}, {desc: FileData.height}])
+  // Declared orders keyed like a column mark that column
+  expect(sortedColumn(media, {column: 'size', direction: 'asc'})).toEqual({
+    column: 'size',
+    direction: 'asc'
+  })
+  // Unknown orders fall back to the default order: folders, then the newest
+  const [folders, newest] = media.sort as Array<Order>
+  expect(overviewOrder(media, {column: 'nope', direction: 'asc'})).toEqual([
+    folders,
+    newest
+  ])
+  expect(newest).toEqual({desc: Entry.id})
+})
+
+test('options of a filter match any, filters match all', () => {
+  const media = resolveOverview(config, rootParent('media'))
+  const [show, , fileType] = media.filters
+  const option = (key: string) =>
+    [...show.options, ...fileType.options].find(option => option.key === key)!
+      .filter
+  const selection = {
+    fileType: ['pdf', 'document', 'unknown'],
+    show: ['files', 'folders'],
+    other: ['x']
+  }
+  // Unknown keys drop, filters of one option keep the first
+  expect(pickedFilters(media, selection)).toEqual({
+    show: ['files'],
+    fileType: ['pdf', 'document']
+  })
+  expect(overviewFilter(media, selection)).toEqual({
+    and: [option('files'), {or: [option('pdf'), option('document')]}]
+  })
+  expect(overviewFilter(media, {fileType: ['pdf']})).toEqual(option('pdf'))
+  expect(overviewFilter(media, {})).toBeUndefined()
+})
+
+async function mediaLibrary() {
+  const db = new LocalDB(config)
+  await db.sync()
+  const start = Date.UTC(2026, 0, 1)
+  // Created an hour apart, their ids start with letters of either case
+  const at = (hour: number) => setSystemTime(start + hour * 3_600_000)
+  const file = (
+    hour: number,
+    title: string,
+    extension: string,
+    size: number
+  ) => {
+    at(hour)
+    const id = createId()
+    return {
+      op: 'create' as const,
+      id,
+      type: 'MediaFile',
+      locale: null,
+      workspace: 'main',
+      root: 'media',
+      data: {title, path: id, location: `${id}${extension}`, extension, size}
+    }
+  }
+  const folder = (hour: number, title: string) => {
+    at(hour)
+    return db.create({
+      type: MediaLibrary,
+      workspace: 'main',
+      root: 'media',
+      set: {title}
+    })
+  }
+  try {
+    await db.mutate([file(0, 'Annual report', '.pdf', 300)])
+    await folder(1, 'Folder')
+    await db.mutate([
+      file(2, 'Meeting notes', '.docx', 50),
+      file(3, 'Photo', '.jpg', 200)
+    ])
+    await folder(4, 'Archive')
+    await db.mutate([file(5, 'Scanned letter', '.PDF', 100)])
+  } finally {
+    setSystemTime()
+  }
+  return db
+}
+
+test('explorers list media folders first in their manual order, then files newest first', async () => {
+  const db = await mediaLibrary()
+  const store = createDashboardStore(config, db)
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms(
+    {workspace: 'main', root: 'media'},
+    {rootData: atom(getRoot(config.workspaces.main.media))}
+  )
+  const titles = async () =>
+    (await store.get(explorer.itemsReady(null))).map(item => item.title)
+  expect(await titles()).toEqual([
+    'Folder',
+    'Archive',
+    'Scanned letter',
+    'Photo',
+    'Meeting notes',
+    'Annual report'
+  ])
+  expect((await store.get(explorer.pageReady)).sort.manual).toBe(false)
+  // Picking Latest again lists the oldest first, still below the folders
+  store.set(explorer.requestedSort, {column: 'latest', direction: 'asc'})
+  expect(await titles()).toEqual([
+    'Folder',
+    'Archive',
+    'Annual report',
+    'Meeting notes',
+    'Photo',
+    'Scanned letter'
+  ])
+})
+
+test('explorers filter media by file type, keeping folders', async () => {
+  const db = await mediaLibrary()
+  const store = createDashboardStore(config, db)
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms(
+    {workspace: 'main', root: 'media'},
+    {rootData: atom(getRoot(config.workspaces.main.media))}
+  )
+  const titles = async () =>
+    (await store.get(explorer.itemsReady(null))).map(item => item.title)
+  const media = await store.get(explorer.overview)
+  const fileType = media.filters.find(filter => filter.key === 'fileType')!
+  const show = media.filters.find(filter => filter.key === 'show')!
+
+  store.set(explorer.toggleFilter, fileType, 'pdf')
+  store.set(explorer.requestedSort, {column: 'title', direction: 'desc'})
+  // Extensions match in either case, folders stay to browse into
+  expect(await titles()).toEqual([
+    'Scanned letter',
+    'Folder',
+    'Archive',
+    'Annual report'
+  ])
+  const page = await store.get(explorer.pageReady)
+  expect(page.filters).toEqual({fileType: ['pdf']})
+  expect(page.sort.label).toBe('Title')
+  expect(page.sort.manual).toBe(false)
+  expect(page.query.filter).toEqual(fileType.options[1].filter)
+
+  // Several options of a filter match any of them
+  store.set(explorer.toggleFilter, fileType, 'document')
+  expect(await titles()).toEqual([
+    'Scanned letter',
+    'Meeting notes',
+    'Folder',
+    'Archive',
+    'Annual report'
+  ])
+
+  // Filters match all, options of a single choice filter replace each other
+  store.set(explorer.toggleFilter, show, 'folders')
+  store.set(explorer.toggleFilter, show, 'files')
+  expect(store.get(explorer.requestedFilters)).toEqual({
+    fileType: ['pdf', 'document'],
+    show: ['files']
+  })
+  expect(await titles()).toEqual([
+    'Scanned letter',
+    'Meeting notes',
+    'Annual report'
+  ])
+
+  // The filters combine with the search terms
+  store.set(explorer.search, 'report')
+  expect(await titles()).toEqual(['Annual report'])
+
+  store.set(explorer.search, '')
+  store.set(explorer.clearFilters)
+  store.set(explorer.requestedSort, {column: 'size', direction: 'desc'})
+  expect(await titles()).toEqual([
+    'Annual report',
+    'Photo',
+    'Scanned letter',
+    'Meeting notes',
+    'Folder',
+    'Archive'
+  ])
+  expect((await store.get(explorer.pageReady)).filters).toEqual({})
+})
+
+test('filter options can be loaded from the content', async () => {
+  const brandFilter: OverviewFilter = {
+    label: 'Brand',
+    async options({graph, locale}) {
+      const brands = await graph.find({
+        type: Brand,
+        locale,
+        select: {id: Entry.id, title: Entry.title},
+        orderBy: {asc: Entry.title}
+      })
+      return Object.fromEntries(
+        brands.map(brand => [
+          brand.id,
+          {label: brand.title, filter: {brand: {has: {_entry: brand.id}}}}
+        ])
+      )
+    }
+  }
+  const catalogue = Config.create({
+    schema: config.schema,
+    workspaces: {
+      main: Config.workspace('Main', {
+        source: 'content',
+        roots: {
+          products: Config.root('Products', {
+            contains: ['Product'],
+            overview: {filters: {brand: brandFilter}}
+          }),
+          brands: Config.root('Brands', {contains: ['Brand']})
+        }
+      })
+    }
+  })
+  const db = new LocalDB(catalogue)
+  await db.sync()
+  const brand = (title: string) =>
+    db.create({type: Brand, workspace: 'main', root: 'brands', set: {title}})
+  const acme = await brand('Acme')
+  await brand('Zeta')
+  const product = (title: string, set: Record<string, unknown> = {}) =>
+    db.create({
+      type: Product,
+      workspace: 'main',
+      root: 'products',
+      set: {title, ...set}
+    })
+  await product('Chair', {
+    brand: {_id: createId(), _type: 'entry', _entry: acme._id}
+  })
+  await product('Lamp')
+  const store = createDashboardStore(catalogue, db)
+  await store.get(userPolicyReadyAtom)
+  const explorer = createExplorerAtoms(
+    {workspace: 'main', root: 'products'},
+    {rootData: atom(getRoot(catalogue.workspaces.main.products))}
+  )
+  const overview = await store.get(explorer.overview)
+  const [filter] = overview.filters
+  expect(filter.options.map(option => option.label)).toEqual(['Acme', 'Zeta'])
+  store.set(explorer.toggleFilter, filter, acme._id)
+  expect(
+    (await store.get(explorer.itemsReady(null))).map(item => item.title)
+  ).toEqual(['Chair'])
+  const page = await store.get(explorer.pageReady)
+  expect(page.overview.filters[0].options).toHaveLength(2)
+  // New entries add options
+  await brand('Beta')
+  await store.set(syncAtom)
+  const updated = await store.get(explorer.overview)
+  expect(updated.filters[0].options.map(option => option.label)).toEqual([
+    'Acme',
+    'Beta',
+    'Zeta'
+  ])
+})

@@ -1,0 +1,239 @@
+import type {Page} from 'playwright'
+import {expect, test} from '../support/DashboardTest.js'
+import {
+  overviewPhotoPreview,
+  overviewScenarioIds as ids
+} from '../support/OverviewScenarioData.js'
+import {OverviewScenarioMount} from '../support/OverviewScenarioMount.js'
+
+async function open(page: Page, hash: string) {
+  await page.evaluate(hash => {
+    localStorage.removeItem('alinea-dashboard-theme')
+    window.history.replaceState(null, '', hash)
+  }, hash)
+}
+
+function table(page: Page) {
+  return page.getByRole('treegrid', {name: 'Explorer entries'})
+}
+
+async function titles(page: Page) {
+  return table(page)
+    .getByRole('row')
+    .evaluateAll(rows =>
+      rows.map(
+        row =>
+          row.querySelector('[data-slot="table-title"]')?.textContent?.trim() ??
+          ''
+      )
+    )
+}
+
+test('shows the columns of the parent overview', async ({mount, page}) => {
+  await open(page, '#/entry/main/products')
+  await mount(<OverviewScenarioMount />)
+  const header = page.locator('[data-slot="table-header"]')
+  await expect(header).toContainText('Title')
+  for (const column of ['Article number', 'Categories', 'Brand', 'Price'])
+    await expect(header.getByText(column, {exact: true})).toBeVisible()
+  // The article number is placed before the built-in columns
+  await expect
+    .poll(() =>
+      header
+        .locator('[data-slot="table-head"]')
+        .evaluateAll(cells => cells.map(cell => cell.textContent?.trim()))
+    )
+    .toEqual(['Title', 'Article number', 'Categories', 'Brand', 'Price'])
+  // All products share a type and no product stores audit data, the status
+  // of a product shows after its title instead of in a column
+  for (const column of ['Type', 'Status', 'Updated', 'Author'])
+    await expect(header.getByText(column, {exact: true})).toHaveCount(0)
+  const lamp = table(page).getByRole('row', {name: /^Lamp/})
+  await expect(
+    lamp
+      .locator('[data-slot="table-title"]')
+      .getByRole('img', {name: 'Unpublished'})
+  ).toBeVisible()
+  await expect(
+    table(page).getByRole('img', {name: /Draft|Unpublished|Archived/})
+  ).toHaveCount(1)
+  const chair = table(page).getByRole('row', {name: /^Chair/})
+  await expect(chair).toContainText('€20.00')
+  await expect(chair).toContainText('A-100')
+  await expect(chair).toContainText('Zeta')
+  // Linked categories, sorted by title
+  await expect(
+    table(page).getByRole('row', {name: /^Table/})
+  ).toHaveAccessibleName(/Chairs, Tables/)
+  // Toolbar actions of the overview
+  await expect(
+    page.getByRole('button', {name: 'Export products'})
+  ).toBeVisible()
+  // Cards show the status after the title too
+  await page.getByRole('radio', {name: 'Card view'}).click()
+  const cards = page.getByRole('grid', {name: 'Explorer entries'})
+  await expect(
+    cards
+      .getByRole('row', {name: /^Lamp/})
+      .locator('[data-slot="content-card-title"]')
+      .getByRole('img', {name: 'Unpublished'})
+  ).toBeVisible()
+  await expect(
+    cards
+      .getByRole('row', {name: /^Chair/})
+      .locator('[data-slot="content-card-suffix"]')
+  ).toHaveCount(0)
+})
+
+test('sorts by a column header and keeps the sort in the url', async ({
+  mount,
+  page
+}) => {
+  await open(page, '#/entry/main/products')
+  await mount(<OverviewScenarioMount />)
+  await expect.poll(() => titles(page)).toEqual(['Chair', 'Table', 'Lamp'])
+  const list = page.locator('[data-reorderable]')
+  await expect(list).toHaveCount(1)
+
+  await page.getByRole('button', {name: 'Price', exact: true}).click()
+  await expect(page).toHaveURL(/\?sort=price$/)
+  await expect.poll(() => titles(page)).toEqual(['Table', 'Lamp', 'Chair'])
+  // Sorting only changes the view, entries can not be reordered meanwhile
+  await expect(list).toHaveCount(0)
+
+  await page.getByRole('button', {name: 'Price', exact: true}).click()
+  await expect(page).toHaveURL(/\?sort=-price$/)
+  await expect.poll(() => titles(page)).toEqual(['Chair', 'Lamp', 'Table'])
+
+  // Reset in the filter and sort menu returns to the default order
+  await page.getByRole('button', {name: 'Filter and sort'}).click()
+  await page
+    .getByRole('dialog', {name: 'Filter and sort'})
+    .getByRole('button', {name: 'Reset', exact: true})
+    .click()
+  await expect(page).not.toHaveURL(/sort=/)
+  await expect.poll(() => titles(page)).toEqual(['Chair', 'Table', 'Lamp'])
+  await expect(list).toHaveCount(1)
+})
+
+test('keeps the sort when returning to the overview', async ({mount, page}) => {
+  await open(page, '#/entry/main/products')
+  await mount(<OverviewScenarioMount />)
+  await page.getByRole('button', {name: 'Price', exact: true}).click()
+  await expect(page).toHaveURL(/\?sort=price$/)
+  await table(page).getByRole('row', {name: /^Lamp/}).click()
+  await expect(page.getByRole('heading', {level: 1})).toHaveText('Lamp')
+  await page.getByRole('button', {name: 'Back to root'}).click()
+  await expect(page).toHaveURL(/\?sort=price$/)
+  await expect.poll(() => titles(page)).toEqual(['Table', 'Lamp', 'Chair'])
+})
+
+test('opens linked entries from a cell', async ({mount, page}) => {
+  await open(page, '#/entry/main/products')
+  await mount(<OverviewScenarioMount />)
+  await table(page)
+    .getByRole('row', {name: /^Chair/})
+    .getByRole('button', {name: 'Zeta', exact: true})
+    .click()
+  await expect(page).toHaveURL(new RegExp(`${ids.zeta}$`))
+  await expect(page.getByRole('heading', {level: 1})).toHaveText('Zeta')
+})
+
+test('lists mixed children with per type columns and card thumbnails', async ({
+  mount,
+  page
+}) => {
+  await open(page, `#/entry/main/blog/${ids.blog}`)
+  await mount(<OverviewScenarioMount />)
+  // The blog overview defaults to cards with the cover as image
+  const cards = page.getByRole('grid', {name: 'Explorer entries'})
+  await expect(cards.locator(`img[src="${overviewPhotoPreview}"]`)).toHaveCount(
+    1
+  )
+  await page.getByRole('radio', {name: 'Row view'}).click()
+  const header = page.locator('[data-slot="table-header"]')
+  await expect(header.getByText('Type', {exact: true})).toBeVisible()
+  await expect(header.getByText('Status', {exact: true})).toHaveCount(0)
+  // Ordered by the default sort: newest first
+  await expect.poll(() => titles(page)).toEqual(['Meetup', 'Post'])
+  await expect(table(page).getByRole('row', {name: /^Meetup/})).toContainText(
+    'Ann'
+  )
+  await expect(table(page).getByRole('row', {name: /^Post/})).toContainText(
+    'Bob'
+  )
+  await page.getByRole('button', {name: 'Author', exact: true}).click()
+  await expect.poll(() => titles(page)).toEqual(['Meetup', 'Post'])
+  await page.getByRole('button', {name: 'Author', exact: true}).click()
+  await expect.poll(() => titles(page)).toEqual(['Post', 'Meetup'])
+})
+
+test('lists media with a preview, dimensions, size and file type', async ({
+  mount,
+  page
+}) => {
+  await open(page, '#/entry/main/media')
+  await mount(<OverviewScenarioMount />)
+  await page.getByRole('radio', {name: 'Row view'}).click()
+  // Folders first, then the files by id, which starts with the creation time
+  await expect
+    .poll(() => titles(page))
+    .toEqual(['Archive', 'Photo', 'Notes', 'Letter', 'Annual report'])
+  // The photo records who last updated it
+  const header = page.locator('[data-slot="table-header"]')
+  await expect(header.getByText('Updated', {exact: true})).toBeVisible()
+  await expect(header.getByText('Author', {exact: true})).toBeVisible()
+  const photo = table(page).getByRole('row', {name: /^Photo/})
+  await expect(photo).toContainText('Ann Editor')
+  await expect(photo).toContainText('1200 × 800 px')
+  await expect(photo).toContainText('1.02 kB')
+  await expect(photo).toContainText('GIF')
+  await expect(photo.locator(`img[src="${overviewPhotoPreview}"]`)).toHaveCount(
+    1
+  )
+})
+
+test('lists the products of a brand with an entry table', async ({
+  mount,
+  page
+}) => {
+  await open(page, `#/entry/main/brands/${ids.acme}`)
+  await mount(<OverviewScenarioMount />)
+  const products = page.getByRole('treegrid', {name: 'Products of this brand'})
+  await expect(products.getByRole('row')).toHaveCount(1)
+  await expect(products.getByRole('row', {name: /^Table/})).toContainText(
+    '€5.00'
+  )
+  await expect(
+    page
+      .locator('[data-slot="entry-table"] [data-slot="table-header"]')
+      .getByText('Price', {exact: true})
+  ).toBeVisible()
+  await products
+    .getByRole('row', {name: /^Table/})
+    .locator('[data-slot="table-title"]')
+    .click()
+  await expect(page.getByRole('heading', {level: 1})).toHaveText('Table')
+})
+
+test('keeps checked rows while typing in the search field', async ({
+  mount,
+  page
+}) => {
+  await open(page, '#/entry/main/products')
+  await mount(<OverviewScenarioMount />)
+  await expect.poll(() => titles(page)).toEqual(['Chair', 'Table', 'Lamp'])
+  for (const title of ['Chair', 'Table'])
+    await table(page)
+      .getByRole('checkbox', {name: `Select ${title}`})
+      .click({force: true})
+  const checked = table(page).getByRole('row', {selected: true})
+  await expect(checked).toHaveCount(2)
+  const search = page.getByRole('searchbox', {name: 'Search'})
+  await search.focus()
+  await search.press('ArrowDown')
+  await search.press('ArrowUp')
+  await search.press('Enter')
+  await expect(checked).toHaveCount(2)
+  await expect(page).toHaveURL(/#\/entry\/main\/products$/)
+})

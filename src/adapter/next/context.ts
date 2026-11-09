@@ -1,0 +1,31 @@
+import {generatedRelease} from '#/backend/store/GeneratedRelease.js'
+import {Config} from '#/core/Config.js'
+import type {RequestContext} from '#/core/Connection.js'
+import {forwardDevelopmentCredentials} from './ForwardCredentials.js'
+
+export async function requestContext(
+  config: Config,
+  request?: Request
+): Promise<RequestContext> {
+  const apiKey =
+    process.env.ALINEA_API_KEY ||
+    (process.env.NODE_ENV === 'development' ? 'dev' : await generatedRelease())
+  const dev = process.env.ALINEA_DEV_SERVER
+  if (dev) {
+    return {
+      isDev: true,
+      handlerUrl: new URL('/api', dev),
+      apiKey,
+      applyAuth: init => forwardDevelopmentCredentials(request, apiKey, init)
+    }
+  }
+  // Next sets this for the server it starts (`next start`, standalone), which
+  // serves the files of this build, rather than the deployed baseUrl
+  const localOrigin = process.env.__NEXT_PRIVATE_ORIGIN
+  return {
+    isDev: false,
+    handlerUrl: Config.serverHandlerUrl(config),
+    apiKey,
+    publicUrl: localOrigin ? new URL(localOrigin) : undefined
+  }
+}

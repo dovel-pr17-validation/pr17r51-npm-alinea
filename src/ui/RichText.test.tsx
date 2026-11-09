@@ -1,0 +1,421 @@
+import {cleanup, render, screen, within} from '#test/react.js'
+import type {TextDoc} from '#/core/TextDoc.js'
+import type {Infer} from '#/core/Infer.js'
+import {Config, Field} from '#/index.js'
+import {afterEach, expect, expectTypeOf, test} from 'bun:test'
+import type {ComponentPropsWithoutRef, PropsWithChildren} from 'react'
+import {RichText, type RichTextProps} from './RichText.js'
+
+afterEach(cleanup)
+
+test('RichText forwards data attributes to HTML and custom views', () => {
+  const doc = [
+    {
+      _type: 'bulletList',
+      'data-checklist': true,
+      checklist: true,
+      content: [
+        {
+          _type: 'listItem',
+          content: [
+            {
+              _type: 'paragraph',
+              'data-background': false,
+              content: [{_type: 'text', text: 'Item'}]
+            }
+          ]
+        }
+      ]
+    },
+    {_type: 'table', 'data-layout': 'wide', content: []}
+  ] satisfies TextDoc
+  interface ListProps extends ComponentPropsWithoutRef<'ul'> {
+    'data-checklist'?: boolean
+  }
+  let checklist: unknown
+  function List(props: ListProps) {
+    checklist = props['data-checklist']
+    return <ul {...props} />
+  }
+  const {container, rerender} = render(<RichText doc={doc} ul={List} />)
+  expect(checklist).toBe(true)
+  expect(screen.getByRole('list').getAttribute('data-checklist')).toBe('true')
+  expect(screen.getByRole('list').hasAttribute('checklist')).toBe(false)
+  expect(screen.getByText('Item').getAttribute('data-background')).toBe('false')
+  expect(container.querySelector('table')?.getAttribute('data-layout')).toBe(
+    'wide'
+  )
+
+  rerender(<RichText doc={doc} ul={<ul data-checklist="override" />} />)
+  expect(screen.getByRole('list').getAttribute('data-checklist')).toBe(
+    'override'
+  )
+  rerender(<RichText doc={doc} />)
+  expect(screen.getByRole('list').getAttribute('data-checklist')).toBe('true')
+})
+
+test('RichText renders paragraphs, headings, lists, quotes and rules', () => {
+  const doc = [
+    {
+      _type: 'heading',
+      level: 2,
+      content: [{_type: 'text', text: 'Hello world'}]
+    },
+    {
+      _type: 'paragraph',
+      content: [{_type: 'text', text: 'Intro'}]
+    },
+    {
+      _type: 'bulletList',
+      content: [
+        {
+          _type: 'listItem',
+          content: [
+            {_type: 'paragraph', content: [{_type: 'text', text: 'One'}]}
+          ]
+        }
+      ]
+    },
+    {
+      _type: 'blockquote',
+      content: [{_type: 'paragraph', content: [{_type: 'text', text: 'Quote'}]}]
+    },
+    {_type: 'horizontalRule'}
+  ] satisfies TextDoc
+
+  const {container} = render(<RichText doc={doc} />)
+
+  const heading = screen.getByRole('heading', {level: 2, name: 'Hello world'})
+  expect(heading.id).toBe('hello-world')
+  expect(screen.getByText('Intro').tagName).toBe('P')
+  expect(screen.getByRole('listitem').textContent).toBe('One')
+  expect(container.querySelector('blockquote')?.textContent).toBe('Quote')
+  expect(container.querySelector('hr')).not.toBeNull()
+})
+
+test('RichText renders text marks and link attributes', () => {
+  const doc = [
+    {
+      _type: 'paragraph',
+      content: [
+        {
+          _type: 'text',
+          text: 'Marked',
+          marks: [
+            {_type: 'bold'},
+            {_type: 'italic'},
+            {
+              _type: 'link',
+              href: 'https://example.com',
+              target: '_blank',
+              title: 'Example'
+            }
+          ]
+        }
+      ]
+    }
+  ] satisfies TextDoc
+
+  const {container} = render(<RichText doc={doc} />)
+
+  const link = screen.getByRole('link', {name: 'Marked'})
+  expect(link.getAttribute('href')).toBe('https://example.com')
+  expect(link.getAttribute('target')).toBe('_blank')
+  expect(link.getAttribute('title')).toBe('Example')
+  expect(container.querySelector('a > i > b')?.textContent).toBe('Marked')
+})
+
+test('RichText renders tables with spans', () => {
+  const doc = [
+    {
+      _type: 'table',
+      content: [
+        {
+          _type: 'tableBody',
+          content: [
+            {
+              _type: 'tableRow',
+              content: [
+                {
+                  _type: 'tableHeader',
+                  colspan: 2,
+                  content: [
+                    {
+                      _type: 'paragraph',
+                      content: [{_type: 'text', text: 'Name'}]
+                    }
+                  ]
+                },
+                {
+                  _type: 'tableCell',
+                  rowspan: 2,
+                  content: [
+                    {
+                      _type: 'paragraph',
+                      content: [{_type: 'text', text: 'Value'}]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ] satisfies TextDoc
+
+  const {container} = render(<RichText doc={doc} />)
+
+  const table = container.querySelector('table')
+  expect(table).not.toBeNull()
+  const header = within(table!).getByText('Name').closest('th')
+  const cell = within(table!).getByText('Value').closest('td')
+  expect(header?.colSpan).toBe(2)
+  expect(cell?.rowSpan).toBe(2)
+})
+
+test('RichText renders images and links around them', () => {
+  const doc = [
+    {
+      _type: 'paragraph',
+      content: [
+        {
+          _type: 'image',
+          src: 'https://example.com/button.jpg',
+          alt: 'Contact',
+          title: 'Example title',
+          width: 640,
+          height: '480',
+          marks: [
+            {
+              _type: 'link',
+              href: 'mailto:hello@example.com',
+              target: '_blank',
+              rel: 'noopener'
+            }
+          ]
+        }
+      ]
+    }
+  ] satisfies TextDoc
+
+  render(<RichText doc={doc} />)
+
+  const image = screen.getByRole('img', {name: 'Contact'})
+  expect(image.getAttribute('src')).toBe('https://example.com/button.jpg')
+  expect(image.getAttribute('title')).toBe('Example title')
+  expect(image.getAttribute('width')).toBe('640')
+  expect(image.getAttribute('height')).toBe('480')
+  const link = image.closest('a')
+  expect(link?.getAttribute('href')).toBe('mailto:hello@example.com')
+  expect(link?.getAttribute('target')).toBe('_blank')
+  expect(link?.getAttribute('rel')).toBe('noopener')
+})
+
+test('RichText supports custom HTML views for elements and text', () => {
+  const doc = [
+    {
+      _type: 'heading',
+      level: 2,
+      content: [{_type: 'text', text: 'Title'}]
+    },
+    {
+      _type: 'paragraph',
+      textAlign: 'right',
+      content: [{_type: 'text', text: 'Custom'}]
+    }
+  ] satisfies TextDoc
+  let headingLevel: unknown
+  function H2({
+    children,
+    ...props
+  }: ComponentPropsWithoutRef<'h2'> & {level?: unknown}) {
+    headingLevel = props.level
+    return (
+      <h2 data-testid="heading" {...props}>
+        {children}
+      </h2>
+    )
+  }
+  function P({children, ...props}: ComponentPropsWithoutRef<'p'>) {
+    return (
+      <section data-testid="paragraph" {...props}>
+        {children}
+      </section>
+    )
+  }
+  function Text({children}: {children?: string}) {
+    return <span data-testid="text">{children}</span>
+  }
+
+  render(<RichText doc={doc} h2={H2} p={P} text={Text} />)
+
+  expect(screen.getByTestId('heading').tagName).toBe('H2')
+  expect(screen.getByTestId('heading').id).toBe('title')
+  expect(headingLevel).toBeUndefined()
+  expect(screen.getByTestId('paragraph').tagName).toBe('SECTION')
+  expect(screen.getByTestId('paragraph').style.textAlign).toBe('right')
+  expect(
+    screen.getAllByTestId('text').map(element => element.textContent)
+  ).toEqual(['Title', 'Custom'])
+})
+
+test('RichText supports custom HTML views for marks and React elements', () => {
+  const doc = [
+    {
+      _type: 'paragraph',
+      content: [
+        {
+          _type: 'text',
+          text: 'Important',
+          marks: [{_type: 'bold'}, {_type: 'small'}]
+        }
+      ]
+    }
+  ] satisfies TextDoc
+  function Bold({children}: PropsWithChildren) {
+    return <strong data-testid="bold">{children}</strong>
+  }
+
+  render(
+    <RichText
+      doc={doc}
+      b={Bold}
+      small={<em data-testid="small" className="quiet" />}
+    />
+  )
+
+  expect(screen.getByTestId('bold').tagName).toBe('STRONG')
+  expect(screen.getByTestId('small').className).toBe('quiet')
+  expect(screen.getByTestId('small').textContent).toBe('Important')
+})
+
+test('RichText renders inline elements and alignment attributes', () => {
+  const doc = [
+    {
+      _type: 'paragraph',
+      textAlign: 'center',
+      content: [
+        {_type: 'text', text: 'Line one'},
+        {_type: 'hardBreak'},
+        {
+          _type: 'text',
+          text: 'Two',
+          marks: [{_type: 'subscript'}, {_type: 'superscript'}]
+        }
+      ]
+    }
+  ] satisfies TextDoc
+
+  const {container} = render(<RichText doc={doc} />)
+
+  const paragraph = screen.getByText('Line one').closest('p')
+  expect(paragraph?.style.textAlign).toBe('center')
+  expect(container.querySelector('br')).not.toBeNull()
+  expect(container.querySelector('sup > sub')?.textContent).toBe('Two')
+})
+
+test('RichText uses provided heading ids and ignores left alignment', () => {
+  const doc = [
+    {
+      _type: 'heading',
+      level: 3,
+      id: 'custom-id',
+      textAlign: 'left',
+      content: [{_type: 'text', text: 'Custom heading'}]
+    }
+  ] satisfies TextDoc
+
+  const heading = render(<RichText doc={doc} />).getByRole('heading', {
+    level: 3,
+    name: 'Custom heading'
+  })
+
+  expect(heading.id).toBe('custom-id')
+  expect(heading.style.textAlign).toBe('')
+})
+
+test('RichText places an anchor where an anchor mark starts', () => {
+  const marked = {_type: 'anchor', id: 'fees'}
+  const doc = [
+    {
+      _type: 'paragraph',
+      content: [
+        {_type: 'text', text: 'See '},
+        // One anchor over differently formatted text marks each text node
+        {_type: 'text', text: 'the fees', marks: [{_type: 'bold'}, marked]},
+        {_type: 'text', text: ' below', marks: [marked]}
+      ]
+    }
+  ] satisfies TextDoc
+  // A view for links does not apply to anchors
+  function Link({children}: PropsWithChildren) {
+    return <span>{children}</span>
+  }
+  const {container} = render(<RichText doc={doc} a={Link} />)
+  expect(container.innerHTML).toBe(
+    '<p>See <a id="fees" name="fees"></a><b>the fees</b> below</p>'
+  )
+})
+
+test('RichText renders custom block nodes', () => {
+  interface Blocks {
+    Callout: {message: string}
+  }
+  const doc = [
+    {
+      _type: 'Callout',
+      _id: 'callout-1',
+      message: 'Read this'
+    }
+  ] satisfies TextDoc<Blocks>
+  function Callout({message}: {message: string}) {
+    return <aside data-testid="callout">{message}</aside>
+  }
+  const props = {doc, Callout} satisfies RichTextProps<Blocks>
+
+  render(<RichText<Blocks> {...props} />)
+
+  expect(screen.getByTestId('callout').textContent).toBe('Read this')
+})
+
+test('RichText renders nothing for invalid docs and unknown blocks', () => {
+  const {container, rerender} = render(
+    <RichText doc={null as unknown as TextDoc} />
+  )
+  expect(container.textContent).toBe('')
+
+  rerender(<RichText doc={[{_type: 'Unknown', _id: '1'}]} />)
+  expect(container.textContent).toBe('')
+})
+
+test('RichText infers block views from the queried document type', () => {
+  const Quote = Config.type('Quote', {
+    fields: {text: Field.text('Text')}
+  })
+  const blocks = {Quote}
+  const Post = Config.document('Post', {
+    fields: {body: Field.richText('Body', {schema: blocks})}
+  })
+  type Body = Infer<typeof Post>['body']
+  const body = [
+    {_type: 'Quote', _id: 'quote-1', text: 'Quoted'}
+  ] as unknown as Body
+  function QuoteView({text}: {text: string}) {
+    return <blockquote data-testid="quote">{text}</blockquote>
+  }
+  // No explicit <RichText<typeof blocks>> needed, blocks flow from the doc
+  render(<RichText doc={body} Quote={QuoteView} />)
+  expect(screen.getByTestId('quote').textContent).toBe('Quoted')
+  function WrongView({text}: {text: number}) {
+    return <span>{text}</span>
+  }
+  // @ts-expect-error The Quote block has a string text field
+  void (<RichText doc={body} Quote={WrongView} />)
+  // Documents with different block schemas stay assignable to each other
+  const plain: TextDoc = body
+  const typed: Body = plain
+  void typed
+  // The block schema is part of the type, not only of its alias
+  expectTypeOf<Body>().not.toEqualTypeOf<TextDoc>()
+})

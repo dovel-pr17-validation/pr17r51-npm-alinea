@@ -1,0 +1,108 @@
+@use '@/style' as *;
+
+.root {
+  display: grid;
+  grid-template-columns: 460px minmax(0, 1fr);
+  gap: 96px;
+  align-items: center;
+
+  @media (max-width: 1199.999px) {
+    grid-template-columns: 360px minmax(0, 1fr);
+    gap: 56px;
+  }
+
+  @include sm {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 48px;
+  }
+
+  &-content {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  &-title {
+    margin: 0;
+    font-family: var(--web-title-font);
+    font-weight: 500;
+    font-size: 32px;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    color: var(--web-foreground);
+
+    @include s {
+      font-size: 26px;
+    }
+  }
+
+  &-text {
+    margin: 0;
+    font-size: 19px;
+    line-height: 1.55;
+    color: var(--web-foreground-faded);
+
+    @include s {
+      font-size: 17px;
+    }
+  }
+
+  &-checks,
+  &-link {
+    margin-top: 12px;
+  }
+
+  &-code {
+    position: relative;
+    min-width: 0;
+
+    @include sm {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+  }
+
+  // Type information floating over the code, like an editor hover
+  &-tooltip {
+    position: absolute;
+    left: 300px;
+    top: 150px;
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 12px 16px;
+    border-radius: 10px;
+    background: var(--web-surface);
+    color: var(--web-code-foreground);
+    font-family: var(--web-mono-font);
+    font-size: 12.5px;
+    line-height: 1.6;
+    white-space: pre;
+    box-shadow: var(--web-shot-shadow);
+
+    @media (max-width: 1199.999px) {
+      left: 200px;
+    }
+
+    @include sm {
+      position: static;
+      align-self: flex-start;
+      max-width: 100%;
+      overflow-x: auto;
+      box-shadow: none;
+    }
+
+    &-line {
+      display: block;
+    }
+
+    &-keyword {
+      color: var(--web-code-keyword);
+    }
+
+    &-type {
+      color: var(--web-code-string);
+    }
+  }
+}

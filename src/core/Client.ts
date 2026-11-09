@@ -1,0 +1,352 @@
+import {HandleAction} from '#/backend/HandleAction.js'
+import {type AuthResult, AuthResultType} from '#/cloud/AuthResult.js'
+import {AbortController, fetch, type Response} from '@alinea/iso'
+import {
+  BLOB_SEQUENCE_CONTENT_TYPE,
+  decodeBlobSequence
+} from './BlobTransport.js'
+import type {Config} from './Config.js'
+import type {
+  BackendCapabilities,
+  DraftTransport,
+  LocalConnection,
+  Revision,
+  UploadMetadata,
+  UploadResponse
+} from './Connection.js'
+import type {Mutation} from './db/Mutation.js'
+import type {Draft, DraftKey} from './Draft.js'
+import type {EntryRecord} from './EntryRecord.js'
+import type {AnyQueryResult, GraphQuery} from './Graph.js'
+import {HttpError} from './HttpError.js'
+import {getScope} from './Scope.js'
+import {ReadonlyTree, type Tree} from './source/Tree.js'
+import type {GetBlobsOptions} from './source/Source.js'
+import type {User, UserInput} from './User.js'
+import {base64} from './util/Encoding.js'
+import {isRecord} from './util/Objects.js'
+
+export type AuthenticateRequest = (
+  request?: RequestInit
+) => RequestInit | undefined
+
+export interface ClientOptions {
+  config: Config
+  url: string
+  applyAuth?: AuthenticateRequest
+  unauthorized?: () => void
+}
+
+// Reads give up when the handler does not respond in time, so a hung handler
+// fails a sync instead of holding it, and everything queued behind it. Only
+// the response has to arrive in time: a large blob download takes as long as
+// it needs. The handler answers reads within its own sync wait, while
+// mutations and uploads may take as long as they need.
+const readTimeout = 60_000
+const reads = new Set<HandleAction>([
+  HandleAction.Tree,
+  HandleAction.Sha,
+  HandleAction.Blob,
+  HandleAction.Resolve
+])
+
+export class Client implements LocalConnection {
+  #options: ClientOptions
+  constructor(options: ClientOptions) {
+    this.#options = options
+  }
+
+  authStatus(): Promise<AuthResult> {
+    return this.#requestJson({
+      action: HandleAction.Auth,
+      auth: 'status'
+    }).then<AuthResult>(this.#failOnHttpError)
+  }
+
+  logout = async (): Promise<void> => {
+    const endSession = this.#options.unauthorized
+    await this.#request({
+      action: HandleAction.Auth,
+      auth: 'logout'
+    })
+      .then(res => this.#failOnHttpError(res, false))
+      .then(endSession)
+  }
+
+  capabilities(): Promise<BackendCapabilities> {
+    return this.#requestJson({
+      action: HandleAction.Capabilities
+    }).then<BackendCapabilities>(this.#failOnHttpError)
+  }
+
+  previewToken(): Promise<string> {
+    return this.#requestJson(
+      {action: HandleAction.PreviewToken},
+      {
+        method: 'POST'
+      }
+    ).then<string>(this.#failOnHttpError)
+  }
+
+  prepareUpload(
+    file: string,
+    metadata?: UploadMetadata
+  ): Promise<UploadResponse> {
+    return this.#requestJson(
+      {action: HandleAction.Upload},
+      {
+        method: 'POST',
+        body: JSON.stringify({filename: file, ...metadata})
+      }
+    ).then<UploadResponse>(this.#failOnHttpError)
+  }
+
+  user(): Promise<User | undefined> {
+    return this.#requestJson({action: HandleAction.User})
+      .then<User | null>(this.#failOnHttpError)
+      .then(user => user ?? undefined)
+  }
+
+  enrichUser(user: UserInput): Promise<User> {
+    return this.#requestJson(
+      {action: HandleAction.User, operation: 'enrich'},
+      {
+        method: 'POST',
+        body: JSON.stringify(user)
+      }
+    ).then<User>(this.#failOnHttpError)
+  }
+
+  listUsers(): Promise<Array<User>> {
+    return this.#requestJson({
+      action: HandleAction.User,
+      operation: 'list'
+    }).then<Array<User>>(this.#failOnHttpError)
+  }
+
+  createUser(user: UserInput): Promise<User> {
+    return this.#requestJson(
+      {action: HandleAction.User, operation: 'create'},
+      {
+        method: 'POST',
+        body: JSON.stringify(user)
+      }
+    ).then<User>(this.#failOnHttpError)
+  }
+
+  updateUser(user: UserInput): Promise<User> {
+    return this.#requestJson(
+      {action: HandleAction.User, operation: 'update'},
+      {
+        method: 'POST',
+        body: JSON.stringify(user)
+      }
+    ).then<User>(this.#failOnHttpError)
+  }
+
+  removeUser(email: string): Promise<void> {
+    return this.#requestJson(
+      {action: HandleAction.User, operation: 'remove'},
+      {
+        method: 'POST',
+        body: JSON.stringify({email})
+      }
+    ).then<void>(res => this.#failOnHttpError(res, false))
+  }
+
+  resolve<Query extends GraphQuery>(
+    query: Query
+  ): Promise<AnyQueryResult<Query>> {
+    const scope = getScope(this.#options.config)
+    const body = scope.stringify(query)
+    return this.#requestJson(
+      {action: HandleAction.Resolve},
+      {method: 'POST', body}
+    ).then<AnyQueryResult<Query>>(this.#failOnHttpError)
+  }
+
+  mutate(mutations: Array<Mutation>): Promise<{sha: string}> {
+    return this.#requestJson(
+      {action: HandleAction.Mutate},
+      {method: 'POST', body: JSON.stringify(mutations)}
+    ).then<{sha: string}>(this.#failOnHttpError)
+  }
+
+  authenticate(applyAuth: AuthenticateRequest, unauthorized: () => void) {
+    return new Client({...this.#options, applyAuth, unauthorized})
+  }
+
+  // History
+  revisions(file: string): Promise<Array<Revision>> {
+    return this.#requestJson({action: HandleAction.History, file}).then<
+      Array<Revision>
+    >(this.#failOnHttpError)
+  }
+
+  revisionData(
+    file: string,
+    revisionId: string
+  ): Promise<EntryRecord | undefined> {
+    return this.#requestJson({
+      action: HandleAction.History,
+      file,
+      revisionId
+    })
+      .then<EntryRecord>(this.#failOnHttpError)
+      .then(res => res ?? undefined)
+  }
+
+  // Source
+
+  getTreeIfDifferent(sha: string): Promise<ReadonlyTree | undefined> {
+    return this.#requestJson({
+      action: HandleAction.Tree,
+      sha
+    })
+      .then<Tree | null>(this.#failOnHttpError)
+      .then(tree => (tree ? new ReadonlyTree(tree) : undefined))
+  }
+
+  getSha(): Promise<string> {
+    return this.#requestJson({action: HandleAction.Sha}).then<string>(
+      this.#failOnHttpError
+    )
+  }
+
+  async *getBlobs(
+    shas: ReadonlyArray<string>,
+    options: GetBlobsOptions = {}
+  ): AsyncGenerator<[sha: string, blob: Uint8Array]> {
+    if (shas.length === 0) return
+    const response = await this.#request(
+      {action: HandleAction.Blob},
+      {
+        method: 'POST',
+        body: JSON.stringify({shas}),
+        signal: options.signal,
+        headers: {
+          'content-type': 'application/json',
+          accept: BLOB_SEQUENCE_CONTENT_TYPE
+        }
+      }
+    ).then(response => this.#failOnHttpError<Response>(response, false))
+    const contentType = response.headers.get('content-type')
+    if (!contentType?.includes(BLOB_SEQUENCE_CONTENT_TYPE))
+      throw new Error(
+        `Expected ${BLOB_SEQUENCE_CONTENT_TYPE}, got ${contentType}`
+      )
+    if (!response.body) throw new Error('Missing blob response body')
+    yield* decodeBlobSequence(response.body, options)
+  }
+
+  // Drafts
+
+  getDraft(key: DraftKey): Promise<Draft | undefined> {
+    return this.#requestJson({action: HandleAction.Draft, key})
+      .then<DraftTransport | null>(this.#failOnHttpError)
+      .then(draft =>
+        draft ? {...draft, draft: base64.parse(draft.draft)} : undefined
+      )
+  }
+
+  storeDraft(draft: Draft): Promise<void> {
+    return this.#requestJson(
+      {action: HandleAction.Draft},
+      {
+        method: 'POST',
+        body: JSON.stringify({...draft, draft: base64.stringify(draft.draft)})
+      }
+    ).then<void>(res => this.#failOnHttpError(res, false))
+  }
+
+  #request(
+    params: {action: HandleAction; [key: string]: string},
+    init: RequestInit = {},
+    retry = false
+  ): Promise<Response> {
+    const {url, applyAuth = v => v, unauthorized} = this.#options
+    const controller = new AbortController()
+    const signal = controller.signal
+    const location = `${url}?${new URLSearchParams(params).toString()}`
+    const timer = reads.has(params.action)
+      ? setTimeout(() => {
+          const seconds = readTimeout / 1000
+          controller.abort(new Error(`No response within ${seconds}s`))
+        }, readTimeout)
+      : undefined
+    const promise = fetch(location, {
+      ...applyAuth(init),
+      signal
+    })
+      .finally(() => clearTimeout(timer))
+      .catch(err => {
+        throw new HttpError(
+          500,
+          `${err} @ ${init?.method || 'GET'} action ${params.action}`
+        )
+      })
+      .then(async res => {
+        if (res.ok) return res
+        const isJson = res.headers
+          .get('content-type')
+          ?.includes('application/json')
+        let errorMessage: string
+        if (isJson) {
+          const body: unknown = await res.json()
+          if (
+            res.status === 401 &&
+            isRecord(body) &&
+            body.type === AuthResultType.NeedsRefresh
+          ) {
+            // We'll attempt a single retry if the access token is refreshed
+            if (!retry) return this.#request(params, init, true)
+          }
+          if (isRecord(body) && typeof body.error === 'string')
+            errorMessage = body.error
+          else errorMessage = JSON.stringify(body, null, 2)
+        } else {
+          errorMessage = await res.text()
+        }
+        errorMessage = errorMessage.replace(/\s+/g, ' ').slice(0, 1024)
+        if (res.status === 401) unauthorized?.()
+        throw new HttpError(
+          res.status,
+          `${errorMessage} @ ${init?.method || 'GET'} action ${params.action}`
+        )
+      })
+    const cancel = () => controller.abort()
+    function cancelify<T>(promise: Promise<T>) {
+      const t = promise.then.bind(promise)
+      const c = promise.catch.bind(promise)
+      return Object.assign(promise, {
+        cancel,
+        then: (...args: any[]) => cancelify(t(...args)),
+        catch: (...args: any[]) => cancelify(c(...args))
+      })
+    }
+    return cancelify(promise)
+  }
+
+  #requestJson<Params extends {action: HandleAction}>(
+    params: Params,
+    init?: RequestInit
+  ) {
+    return this.#request(params, {
+      ...init,
+      headers: {
+        ...init?.headers,
+        'content-type': 'application/json',
+        accept: 'application/json'
+      }
+    })
+  }
+
+  async #failOnHttpError<T = Response>(
+    res: Response,
+    expectJson = true
+  ): Promise<T> {
+    if (res.ok) return (expectJson ? res.json() : res) as T
+    const text = await res.text()
+    throw new HttpError(res.status, text || res.statusText)
+  }
+}

@@ -1,0 +1,54 @@
+.WorkspaceMenu-parent {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.WorkspaceMenu-avatar {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.WorkspaceMenu-avatar-logo {
+  width: 100%;
+  height: 100%;
+}
+
+.WorkspaceMenu-avatarTrigger {
+  display: flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  padding: 0;
+  justify-content: center;
+}
+
+.WorkspaceMenu-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border: 0;
+  margin-left: -8px;
+  justify-content: space-between;
+  margin-right: auto;
+}
+
+.WorkspaceMenu-trigger-text {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.WorkspaceMenu-search {
+  flex-shrink: 0;
+}

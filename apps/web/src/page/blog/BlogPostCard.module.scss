@@ -1,0 +1,52 @@
+@use '@/style' as *;
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 24px;
+  border-top: 1px solid var(--web-outline);
+  color: var(--web-foreground);
+  text-decoration: none;
+
+  &-title {
+    margin: 0;
+    font-family: var(--web-title-font);
+    font-weight: 500;
+    font-size: 22px;
+    line-height: 1.3;
+    letter-spacing: -0.02em;
+    transition: color 0.15s ease-out;
+
+    @include sm {
+      font-size: 19px;
+    }
+  }
+
+  &:is(:hover, :focus-visible) &-title {
+    color: var(--web-accent);
+  }
+
+  &-introduction {
+    margin: 4px 0 0;
+    font-size: 16px;
+    line-height: 1.65;
+    color: var(--web-foreground-faded);
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+    line-clamp: 4;
+    overflow: hidden;
+  }
+
+  &-read {
+    padding-top: 4px;
+    font-size: 14.5px;
+    font-weight: 500;
+    color: var(--web-accent);
+  }
+
+  &:hover &-read {
+    color: var(--web-accent-strong);
+  }
+}

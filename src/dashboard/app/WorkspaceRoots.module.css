@@ -1,0 +1,75 @@
+.WorkspaceRoots-profile-popover {
+  min-width: 260px;
+  padding: 4px;
+  margin: 0;
+  font-size: var(--alinea-font-size-base);
+  list-style: none;
+}
+
+/* Outranks the padding and shadow of the popover surface */
+.WorkspaceRoots-profile-popover-surface[data-slot] {
+  overflow: hidden;
+  padding: 0;
+  background: var(--alinea-bg);
+  box-shadow: var(--alinea-shadow-tooltip);
+}
+
+.WorkspaceRoots-profile-popover-user,
+.WorkspaceRoots-profile-popover-item {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  gap: 9px;
+  padding: 3px 8px;
+  font-size: inherit;
+}
+
+.WorkspaceRoots-profile-popover-user {
+  color: var(--alinea-fg);
+  font-weight: 400;
+}
+
+.WorkspaceRoots-profile-popover-item {
+  justify-content: space-between;
+  color: var(--alinea-fg-muted);
+  font-weight: 400;
+}
+
+.WorkspaceRoots-profile-popover-user-icon {
+  flex-shrink: 0;
+  font-size: 16px;
+}
+
+.WorkspaceRoots-profile-popover-user-title {
+  flex: 1;
+}
+
+.WorkspaceRoots-profile-popover-action {
+  display: flex;
+  padding: 0;
+  font-size: inherit;
+}
+
+.WorkspaceRoots-profile-popover-action-button {
+  width: 100%;
+  min-height: 38px;
+  justify-content: flex-start;
+  gap: 9px;
+  padding: 3px 8px;
+  border-radius: var(--alinea-radius);
+  font-size: var(--alinea-font-size-base);
+  font-weight: 400;
+
+  &[data-variant='ghost'] {
+    --alinea-button-accent: var(--alinea-fg-muted);
+  }
+
+  &[data-variant='ghost'][data-hovered] {
+    --alinea-button-accent: var(--alinea-fg);
+  }
+}
+
+.WorkspaceRoots-trigger {
+  min-width: 96px;
+  justify-content: space-between;
+}

@@ -1,0 +1,56 @@
+.ExplorerTable-viewport {
+  box-sizing: border-box;
+  min-height: 0;
+  flex: 1;
+  height: 100%;
+  padding: 16px;
+  overflow: hidden;
+
+  &.is-compact {
+    padding: 0;
+  }
+}
+
+.ExplorerTable {
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.ExplorerTable-breadcrumbs {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  gap: 3px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.ExplorerTable-breadcrumb {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+  overflow: hidden;
+}
+
+.ExplorerTable-breadcrumb-root {
+  display: inline-block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ExplorerTable-breadcrumb-label {
+  display: inline-block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 768px) {
+  .ExplorerTable-viewport {
+    padding: 8px;
+  }
+}

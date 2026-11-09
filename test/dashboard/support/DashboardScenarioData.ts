@@ -1,0 +1,43 @@
+export const dashboardScenarioIds = {
+  alpha: 'workflow-alpha',
+  beta: 'workflow-beta',
+  folder: 'workflow-folder',
+  child: 'workflow-child',
+  otherFolder: 'workflow-other-folder',
+  otherChild: 'workflow-other-child',
+  orderedFolder: 'workflow-ordered-folder',
+  orderedApple: 'workflow-ordered-apple',
+  orderedZebra: 'workflow-ordered-zebra',
+  rootOrderedApple: 'workflow-root-ordered-apple',
+  rootOrderedZebra: 'workflow-root-ordered-zebra',
+  hiddenFolder: 'workflow-hidden-folder',
+  hiddenChild: 'workflow-hidden-child',
+  localizedStart: 'workflow-localized-start',
+  localizedFolder: 'workflow-localized-folder',
+  localizedChild: 'workflow-localized-child',
+  childLinking: 'workflow-child-linking',
+  localizedTarget: 'workflow-localized-target',
+  localizedLinking: 'workflow-localized-linking',
+  popularTarget: 'workflow-popular-target',
+  popularChild: 'workflow-popular-child',
+  mediaLinking: 'workflow-media-linking',
+  mediaFile: 'workflow-media-file',
+  mediaFolder: 'workflow-media-folder',
+  nestedMediaFolder: 'workflow-nested-media-folder',
+  nestedMediaFile: 'workflow-nested-media-file',
+  uploadedMediaFile: 'workflow-uploaded-media-file',
+  searchPartial: 'workflow-search-partial',
+  searchTitle: 'workflow-search-title',
+  searchBody: 'workflow-search-body'
+} as const
+
+export const dashboardLinkScenarioIds = {
+  existingFile: 'workflow-existing-file',
+  existingImage: 'workflow-existing-image',
+  emptyMediaDirectory: 'workflow-empty-media-directory',
+  mediaDirectory: 'workflow-media-directory',
+  nestedImage: 'workflow-nested-image',
+  referenceFolder: 'workflow-reference-folder',
+  referenceOther: 'workflow-reference-other',
+  referenceTarget: 'workflow-reference-target'
+} as const

@@ -1,0 +1,319 @@
+import {createCMS, Entry} from '#/core.js'
+import {WriteablePolicy} from '#/core/Role.js'
+import {getScope} from '#/core/Scope.js'
+import {MemorySource} from '#/core/source/MemorySource.js'
+import {Config, Field} from '#/index.js'
+import {suite} from '@alinea/suite'
+import {EntryStore} from './EntryStore.js'
+
+const test = suite(import.meta)
+
+const Page = Config.type('Page', {
+  contains: ['Page'],
+  fields: {
+    title: Field.text('Title'),
+    path: Field.path('Path'),
+    tag: Field.text('Tag', {shared: true}),
+    visibility: Field.object('Visibility', {
+      fields: {
+        belgium: Field.check('Belgium'),
+        germany: Field.check('Germany')
+      }
+    })
+  }
+})
+
+const cms = createCMS({
+  schema: {Page},
+  workspaces: {
+    main: Config.workspace('Main', {
+      source: 'content/main',
+      roots: {
+        pages: Config.root('Pages', {contains: ['Page']})
+      }
+    }),
+    international: Config.workspace('International', {
+      source: 'content/international',
+      roots: {
+        articles: Config.root('Articles', {
+          contains: ['Page'],
+          i18n: {locales: ['en', 'nl', 'fr']}
+        })
+      }
+    })
+  }
+})
+
+async function createDb() {
+  const db = await EntryStore.memory(cms.config, new MemorySource())
+  await db.sync()
+  await db.mutate([
+    {
+      op: 'create',
+      id: 'article',
+      type: 'Page',
+      locale: 'en',
+      workspace: 'international',
+      root: 'articles',
+      data: {title: 'Article'}
+    }
+  ])
+  return db
+}
+
+function translator() {
+  const policy = new WriteablePolicy(getScope(cms.config))
+  policy.set(
+    {allow: {read: true}},
+    {locale: 'nl', allow: {create: true, update: true, publish: true}},
+    {locale: 'fr', allow: {create: true, update: true, publish: true}}
+  )
+  return policy
+}
+
+async function rejects(run: () => Promise<unknown>) {
+  try {
+    await run()
+  } catch (error) {
+    return error as Error
+  }
+  throw new Error('Expected a rejection')
+}
+
+test('a locale scoped role can create a translation', async () => {
+  const db = await createDb()
+  const request = await db.request(
+    [
+      {
+        op: 'create',
+        id: 'article',
+        type: 'Page',
+        locale: 'nl',
+        data: {title: 'Artikel'}
+      }
+    ],
+    translator()
+  )
+  test.ok(request.changes.length > 0)
+})
+
+test('a translation cannot change shared fields of locales outside its role', async () => {
+  const db = await createDb()
+  const translate = (tag: string) =>
+    db.request(
+      [
+        {
+          op: 'create',
+          id: 'article',
+          type: 'Page',
+          locale: 'nl',
+          data: {title: 'Artikel', tag}
+        }
+      ],
+      translator()
+    )
+  await db.mutate([
+    {
+      op: 'update',
+      id: 'article',
+      locale: 'en',
+      status: 'published',
+      set: {tag: 'news'}
+    }
+  ])
+  // Sharing the same value leaves the english version alone
+  await translate('news')
+  const error = await rejects(() => translate('sports'))
+  test.is(error.message, 'Permission denied')
+})
+
+test('a denied field inside an object field cannot change', async () => {
+  const db = await createDb()
+  const policy = new WriteablePolicy(getScope(cms.config))
+  policy.set(
+    {allow: {all: true}},
+    {field: Page.visibility.germany, deny: {all: true}}
+  )
+  const update = (visibility: Record<string, boolean>) =>
+    db.request(
+      [
+        {
+          op: 'update',
+          id: 'article',
+          locale: 'en',
+          status: 'published',
+          set: {visibility}
+        }
+      ],
+      policy
+    )
+  await update({belgium: true})
+  const error = await rejects(() => update({belgium: true, germany: true}))
+  test.is(error.message, 'Permission denied')
+})
+
+test('a locale scoped role cannot create outside its locales', async () => {
+  const db = await createDb()
+  const error = await rejects(() =>
+    db.request(
+      [
+        {
+          op: 'create',
+          id: 'other',
+          type: 'Page',
+          locale: 'en',
+          workspace: 'international',
+          root: 'articles',
+          data: {title: 'Other'}
+        }
+      ],
+      translator()
+    )
+  )
+  test.is(error.message, 'Permission denied')
+})
+
+test('create under a parent takes its workspace and root', async () => {
+  const db = await createDb()
+  await db.mutate([
+    {
+      op: 'create',
+      id: 'child',
+      type: 'Page',
+      locale: 'en',
+      parentId: 'article',
+      data: {title: 'Child'}
+    }
+  ])
+  const child = await db.first({
+    id: 'child',
+    locale: 'en',
+    status: 'all',
+    select: {
+      workspace: Entry.workspace,
+      root: Entry.root,
+      parentId: Entry.parentId
+    }
+  })
+  test.equal(child, {
+    workspace: 'international',
+    root: 'articles',
+    parentId: 'article'
+  })
+})
+
+test('create under a parent rejects a different workspace or root', async () => {
+  const db = await createDb()
+  const error = await rejects(() =>
+    db.mutate([
+      {
+        op: 'create',
+        id: 'child',
+        type: 'Page',
+        locale: null,
+        workspace: 'main',
+        root: 'pages',
+        parentId: 'article',
+        data: {title: 'Child'}
+      }
+    ])
+  )
+  test.ok(error.message.includes('parent'))
+})
+
+test('permissions scoped to a parent apply to creating children', async () => {
+  const db = await createDb()
+  const policy = new WriteablePolicy(getScope(cms.config))
+  policy.set(
+    {allow: {read: true}},
+    {id: 'article', allow: {create: true, publish: true}}
+  )
+  const request = await db.request(
+    [
+      {
+        op: 'create',
+        id: 'child',
+        type: 'Page',
+        locale: 'en',
+        parentId: 'article',
+        data: {title: 'Child'}
+      }
+    ],
+    policy
+  )
+  test.ok(request.changes.length > 0)
+})
+
+test('deleting checks the permission of every removed translation', async () => {
+  const db = await createDb()
+  await db.mutate([
+    {
+      op: 'create',
+      id: 'article',
+      type: 'Page',
+      locale: 'nl',
+      data: {title: 'Artikel'}
+    }
+  ])
+  const policy = new WriteablePolicy(getScope(cms.config))
+  policy.set({allow: {read: true}}, {locale: 'en', allow: {delete: true}})
+  const error = await rejects(() =>
+    db.request([{op: 'remove', id: 'article'}], policy)
+  )
+  test.is(error.message, 'Permission denied')
+  const request = await db.request(
+    [{op: 'remove', id: 'article', locale: 'en'}],
+    policy
+  )
+  test.ok(request.changes.length > 0)
+})
+
+async function createChild(db: EntryStore, status?: 'draft') {
+  await db.mutate([
+    {
+      op: 'create',
+      id: 'parent',
+      type: 'Page',
+      locale: null,
+      status,
+      workspace: 'main',
+      root: 'pages',
+      data: {title: 'Parent'}
+    },
+    {
+      op: 'create',
+      id: 'child',
+      type: 'Page',
+      locale: null,
+      status,
+      parentId: 'parent',
+      data: {title: 'Child'}
+    }
+  ])
+}
+
+function childVersions(db: EntryStore) {
+  return db.resolve({id: 'child', status: 'all', select: Entry.id})
+}
+
+test('deleting an unpublished parent deletes its children', async () => {
+  const db = await createDb()
+  await createChild(db, 'draft')
+  test.equal((await childVersions(db)).length, 1)
+  await db.mutate([{op: 'remove', id: 'parent'}])
+  test.equal(await childVersions(db), [])
+})
+
+test('deleting a parent checks the permission of its children', async () => {
+  const db = await createDb()
+  await createChild(db)
+  const policy = new WriteablePolicy(getScope(cms.config))
+  policy.set(
+    {allow: {read: true, delete: true}},
+    {id: 'child', deny: {delete: true}}
+  )
+  const error = await rejects(() =>
+    db.request([{op: 'remove', id: 'parent'}], policy)
+  )
+  test.is(error.message, 'Permission denied')
+})

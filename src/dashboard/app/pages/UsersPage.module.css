@@ -1,0 +1,73 @@
+.UsersPage {
+  background: var(--alinea-bg);
+}
+
+.UsersPage-header {
+  height: 48px;
+  padding: 8px 16px;
+}
+
+.UsersPage-search {
+  min-width: 0;
+  flex: 1;
+}
+
+.UsersPage-createButton {
+  flex-shrink: 0;
+}
+
+.UsersPage-content {
+  box-sizing: border-box;
+  flex: 1;
+  min-height: 0;
+  max-width: none;
+  overflow: auto;
+  width: 100%;
+  padding: 16px;
+}
+
+.UsersPage-table {
+  width: 100%;
+}
+
+.UsersPage-identity {
+  display: grid;
+  min-width: 0;
+}
+
+.UsersPage-roles {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  gap: 6px;
+}
+
+.UsersPage-status {
+  display: flex;
+  min-height: 240px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--alinea-fg-muted);
+}
+
+.UsersPage-form-fields {
+  display: grid;
+  gap: 16px;
+}
+
+@media (max-width: 720px) {
+  .UsersPage-header {
+    align-items: stretch;
+    flex-direction: column;
+    height: auto;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    overflow: visible;
+  }
+
+  .UsersPage-createButton {
+    justify-content: center;
+  }
+}

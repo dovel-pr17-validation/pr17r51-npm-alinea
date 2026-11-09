@@ -1,0 +1,435 @@
+import {OAuth2} from '#/backend/api/OAuth2.js'
+import {AuthAction} from '#/backend/Auth.js'
+import {Config} from '#/core/Config.js'
+import type {
+  AuthedContext,
+  AuthOptions,
+  RemoteConnection,
+  RequestContext,
+  Revision,
+  UploadMetadata
+} from '#/core/Connection.js'
+import type {CommitRequest} from '#/core/db/CommitRequest.js'
+import {
+  type Draft,
+  type DraftKey,
+  formatDraftKey,
+  parseDraftKey
+} from '#/core/Draft.js'
+import type {EntryRecord} from '#/core/EntryRecord.js'
+import {HttpError} from '#/core/HttpError.js'
+import {ShaMismatchError} from '#/core/source/ShaMismatchError.js'
+import {ReadonlyTree, type Tree} from '#/core/source/Tree.js'
+import type {GetBlobsOptions} from '#/core/source/Source.js'
+import type {User, UserInput} from '#/core/User.js'
+import {base64} from '#/core/util/Encoding.js'
+import {entries} from '#/core/util/Objects.js'
+import {Workspace} from '#/core/Workspace.js'
+import {MediaLocation} from '#/core/media/MediaLocation.js'
+import {Response} from '@alinea/iso'
+import pkg from '../../package.json' with {type: 'json'}
+import {AuthResultType} from './AuthResult.js'
+import {cloudConfig} from './CloudConfig.js'
+import {
+  CloudHandshakeError,
+  CloudHandshakeServiceError,
+  verifyCloudHandshake
+} from './CloudHandshake.js'
+
+export class CloudRemote extends OAuth2 implements RemoteConnection {
+  #context: RequestContext
+  #config: Config
+
+  constructor(context: RequestContext, config: Config) {
+    const clientId = context.apiKey.split('_')[1]
+    super(context, config, {
+      clientId,
+      clientSecret: context.apiKey,
+      jwksUri: cloudConfig.jwks,
+      tokenEndpoint: cloudConfig.token,
+      authorizationEndpoint: cloudConfig.auth,
+      revocationEndpoint: cloudConfig.revocation,
+      validateClaims(claims) {
+        if (claims.iss !== cloudConfig.url)
+          throw new HttpError(401, `Invalid issuer: ${claims.iss}`)
+        if (claims.cid !== clientId)
+          throw new HttpError(401, `Invalid client id: ${claims.cid}`)
+      }
+    })
+    this.#context = context
+    this.#config = config
+  }
+
+  async capabilities() {
+    return {users: false}
+  }
+
+  async getTreeIfDifferent(sha: string): Promise<ReadonlyTree | undefined> {
+    const ctx = this.#context
+    // Without an api key there is no cloud content to sync with: keep serving
+    // the bundled database instead of asking the cloud and failing.
+    if (!validApiKey(ctx.apiKey)) return
+    return parseOutcome<Tree | null>(
+      read(
+        cloudConfig.tree,
+        json({
+          method: 'POST',
+          headers: bearer(ctx),
+          body: JSON.stringify({
+            contentDir: Config.contentDir(this.#config),
+            sha
+          })
+        })
+      )
+    ).then(tree => {
+      return tree ? new ReadonlyTree(tree) : undefined
+    })
+  }
+
+  async *getBlobs(
+    shas: ReadonlyArray<string>,
+    options: GetBlobsOptions = {}
+  ): AsyncGenerator<[sha: string, blob: Uint8Array]> {
+    const ctx = this.#context
+    const response = await read(cloudConfig.blobs, {
+      method: 'POST',
+      body: JSON.stringify({shas}),
+      signal: options.signal,
+      headers: {
+        ...bearer(ctx),
+        'content-type': 'application/json',
+        accept: 'multipart/form-data'
+      }
+    }).then(failOnHttpError)
+    const form = await response.formData()
+    for (const [key, value] of form.entries()) {
+      // @ts-ignore - Bun formData types are wrong
+      if (value instanceof Blob) {
+        const sha = key.slice(0, 40)
+        const blob = new Uint8Array(await value.arrayBuffer())
+        yield [sha, blob]
+      }
+    }
+  }
+
+  async write(request: CommitRequest): Promise<{sha: string}> {
+    const ctx = this.#context
+    return parseOutcome<{sha: string}>(
+      fetch(
+        cloudConfig.write,
+        json({
+          method: 'POST',
+          headers: bearer(ctx),
+          body: JSON.stringify({
+            contentDir: Config.contentDir(this.#config),
+            ...request
+          })
+        })
+      )
+    ).catch<{sha: string}>(error => {
+      if (error instanceof HttpError && error.code === 409) {
+        const actual = 'actualSha' in error && (error.actualSha as string)
+        const expected = 'expectedSha' in error && (error.expectedSha as string)
+        if (actual && expected) throw new ShaMismatchError(actual, expected)
+      }
+      throw error
+    })
+  }
+
+  async authenticate(request: Request, options: AuthOptions) {
+    const ctx = this.#context
+    const config = this.#config
+    const url = new URL(request.url)
+    const action = url.searchParams.get('auth')
+    switch (action) {
+      case AuthAction.Status: {
+        const token = ctx.apiKey?.split('_')[1]
+        if (!token)
+          return Response.json({
+            type: AuthResultType.MissingApiKey,
+            setupUrl: cloudConfig.setup
+          })
+        return super.authenticate(request, options)
+      }
+      // The cloud server will request a handshake confirmation on this route
+      case AuthAction.Handshake: {
+        const handshakeId = url.searchParams.get('handshake_id')
+        const handshakeToken = url.searchParams.get('handshake_token')
+        if (!handshakeId || !handshakeToken)
+          throw new HttpError(
+            400,
+            'Provide valid handshake credentials to initiate handshake'
+          )
+        const clientId = ctx.apiKey.split('_')[1]
+        if (!clientId)
+          throw new HttpError(401, 'A Cloud API key is required for handshake')
+        try {
+          await verifyCloudHandshake(handshakeToken, {
+            clientId,
+            handshakeId,
+            origin: new URL(ctx.handlerUrl).origin
+          })
+        } catch (cause) {
+          if (cause instanceof CloudHandshakeError)
+            throw new HttpError(
+              401,
+              `Invalid handshake token: ${cause.message}`,
+              {cause}
+            )
+          if (cause instanceof CloudHandshakeServiceError)
+            throw new HttpError(503, cause.message, {cause})
+          throw new HttpError(500, 'Could not verify handshake token', {cause})
+        }
+        const body = {
+          handshake_id: handshakeId,
+          handshake_token: handshakeToken,
+          status: {
+            version: pkg.version,
+            roles: entries(this.#config.roles ?? {}).map(([name, role]) => {
+              return {
+                name,
+                label: role.label,
+                description: role.description ?? ''
+              }
+            }),
+            enableOAuth2: true,
+            sourceDirectories: entries(config.workspaces)
+              .flatMap(([key, workspace]) => {
+                const {source} = Workspace.data(workspace)
+                return [source, MediaLocation.directory(config, key)]
+              })
+              .filter(Boolean)
+          }
+        }
+        // We submit the handshake id, our status and authorize using the
+        // private key
+        const res = await fetch(cloudConfig.handshake, {
+          method: 'POST',
+          body: JSON.stringify(body),
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json',
+            ...bearer(ctx)
+          }
+        }).catch(e => {
+          throw new HttpError(500, `Could not reach handshake api: ${e}`)
+        })
+        if (res.status !== 200)
+          throw new HttpError(
+            res.status,
+            `Handshake failed: ${await res.text()}`
+          )
+        return new Response('alinea cloud handshake')
+      }
+      default:
+        return super.authenticate(request, options)
+    }
+  }
+
+  prepareUpload(file: string, metadata?: UploadMetadata) {
+    const ctx = this.#context
+    return parseOutcome<{
+      entryId: string
+      location: string
+      previewUrl: string
+      provider: string
+      upload: {method?: string; url: string}
+    }>(
+      fetch(
+        cloudConfig.upload,
+        json({
+          method: 'POST',
+          headers: bearer(ctx),
+          body: JSON.stringify({filename: file, ...metadata})
+        })
+      )
+    ).then(({upload, ...rest}) => {
+      return {
+        ...rest,
+        method: upload.method,
+        url: upload.url
+      }
+    })
+  }
+
+  async getDraft(draftKey: DraftKey): Promise<Draft | undefined> {
+    const ctx = this.#context
+    if (!validApiKey(ctx.apiKey)) return
+    const {entryId, locale} = parseDraftKey(draftKey)
+    type CloudDraft = {fileHash: string; update: string; commitHash: string}
+    const data = await parseOutcome<CloudDraft | null>(
+      read(`${cloudConfig.drafts}/${draftKey}`, json({headers: bearer(ctx)}))
+    )
+    return data?.update
+      ? {
+          entryId,
+          locale,
+          fileHash: data.fileHash,
+          draft: base64.parse(data.update)
+        }
+      : undefined
+  }
+
+  async storeDraft(draft: Draft): Promise<void> {
+    const ctx = this.#context
+    const key = formatDraftKey({id: draft.entryId, locale: draft.locale})
+    return parseOutcome<void>(
+      fetch(
+        `${cloudConfig.drafts}/${key}`,
+        json({
+          method: 'PUT',
+          headers: bearer(ctx),
+          body: JSON.stringify({
+            fileHash: draft.fileHash,
+            update: base64.stringify(draft.draft)
+          })
+        })
+      )
+    )
+  }
+
+  revisions(file: string): Promise<Array<Revision>> {
+    const ctx = this.#context
+    return parseOutcome<Array<Revision>>(
+      read(
+        `${cloudConfig.history}?${new URLSearchParams({file})}`,
+        json({headers: bearer(ctx)})
+      )
+    )
+  }
+
+  revisionData(
+    file: string,
+    revisionId: string
+  ): Promise<EntryRecord | undefined> {
+    const ctx = this.#context
+    return parseOutcome<EntryRecord | undefined>(
+      read(
+        `${cloudConfig.history}?${new URLSearchParams({file, ref: revisionId})}`,
+        json({headers: bearer(ctx)})
+      )
+    )
+  }
+
+  async enrichUser(user: User): Promise<User> {
+    // User claims already contain all data needed
+    return user
+  }
+
+  listUsers(): Promise<Array<User>> {
+    const ctx = this.#context
+    return parseOutcome<Array<User>>(
+      read(cloudConfig.users, json({headers: bearer(ctx)}))
+    )
+  }
+
+  createUser(user: UserInput): Promise<User> {
+    const ctx = this.#context
+    return parseOutcome<User>(
+      fetch(
+        cloudConfig.users,
+        json({
+          method: 'POST',
+          headers: bearer(ctx),
+          body: JSON.stringify(user)
+        })
+      )
+    )
+  }
+
+  updateUser(user: UserInput): Promise<User> {
+    const ctx = this.#context
+    return parseOutcome<User>(
+      fetch(
+        cloudConfig.users,
+        json({
+          method: 'PUT',
+          headers: bearer(ctx),
+          body: JSON.stringify(user)
+        })
+      )
+    )
+  }
+
+  removeUser(email: string): Promise<void> {
+    const ctx = this.#context
+    return parseOutcome<void>(
+      fetch(
+        `${cloudConfig.users}/${encodeURIComponent(email)}`,
+        json({
+          method: 'DELETE',
+          headers: bearer(ctx)
+        })
+      )
+    )
+  }
+}
+
+// Reads give up when the cloud does not respond in time, so a hung cloud
+// fails syncs instead of holding them, and the reads waiting on them, forever.
+// Only the response has to arrive in time: a large blob download takes as
+// long as it needs. Writes have no limit, a slow commit may still land and
+// must not be reported as failed.
+const readTimeout = 30_000
+
+async function read(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => {
+    const message = `No response from ${url} within ${readTimeout / 1000}s`
+    controller.abort(new HttpError(504, message))
+  }, readTimeout)
+  const signal = init.signal
+    ? AbortSignal.any([init.signal, controller.signal])
+    : controller.signal
+  try {
+    return await fetch(url, {...init, signal})
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function validApiKey(apiKey: string | undefined): boolean {
+  return Boolean(apiKey?.startsWith('alineapk'))
+}
+
+function bearer(ctx: AuthedContext | RequestContext) {
+  return {authorization: `Bearer ${'token' in ctx ? ctx.token : ctx.apiKey}`}
+}
+
+function json(init: RequestInit = {}): RequestInit {
+  const headers = new Headers(init.headers)
+  if (init.body) headers.set('content-type', 'application/json')
+  headers.set('accept', 'application/json')
+  return {...init, headers}
+}
+
+async function failOnHttpError(response: Response): Promise<Response> {
+  if (!response.ok) throw new HttpError(response.status, await response.text())
+  return response
+}
+
+async function parseOutcome<T>(expected: Promise<Response>): Promise<T> {
+  const response = await expected
+  const contentType = response.headers.get('content-type')
+  const isJson = contentType?.includes('application/json')
+  if (!response.ok && !isJson) {
+    const message = await response.text()
+    throw new HttpError(response.status, message)
+  }
+  const output = await response.json()
+  if (output.success) {
+    return output.data as T
+  }
+  if (output.error) {
+    if (typeof output.error === 'object') {
+      const error = new HttpError(response.status, 'Unexpected error')
+      Object.assign(error, output.error)
+      throw error
+    }
+    throw new HttpError(response.status, output.error)
+  }
+  throw new HttpError(
+    response.status,
+    `Unexpected response: ${JSON.stringify(output)}`
+  )
+}

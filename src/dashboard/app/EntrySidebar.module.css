@@ -1,0 +1,84 @@
+.EntrySidebar-tabs {
+  flex: 1;
+  min-height: 0;
+}
+
+.EntrySidebar-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.EntrySidebar-historyPanel {
+  flex: 1;
+  min-height: 0;
+  margin-top: 0;
+  border-radius: 0;
+  overflow: auto;
+}
+
+.EntrySidebar-history {
+  display: flex;
+  flex-direction: column;
+  padding: 14px 0;
+  gap: 16px;
+}
+
+.EntrySidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 14px;
+}
+
+.EntrySidebar-section + .EntrySidebar-section {
+  border-top: 1px solid var(--alinea-border);
+  padding-top: 14px;
+}
+
+.EntrySidebar-sectionTitle {
+  line-height: 1;
+}
+
+.EntrySidebar-disclosure {
+  min-width: 0;
+}
+
+.EntrySidebar-disclosureTrigger {
+  padding-bottom: 0;
+  line-height: 1;
+
+  &:focus-visible {
+    outline: none;
+  }
+}
+
+.EntrySidebar-disclosurePanel {
+  padding-top: 10px;
+}
+
+.EntrySidebar-loading {
+  display: flex;
+  justify-content: center;
+  padding: 12px 0;
+}
+
+.EntrySidebar-previewPanel {
+  margin: 0;
+  padding: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.EntrySidebar-referencesPanel {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  border-radius: 0;
+  overflow: auto;
+}

@@ -1,0 +1,67 @@
+import {DecompressionStream, Request, Response} from '@alinea/iso'
+import {suite} from '@alinea/suite'
+import {compressResponse, router} from '#/backend/router/Router.js'
+
+const matcher = router.matcher()
+
+const {handle} = router(
+  matcher.get('/').map(() => undefined),
+  matcher.get('/').map(() => new Response('root')),
+  matcher
+    .get('/param/:id')
+    .map(({params}) => new Response(params.id as string)),
+  matcher.get('/file/*').map(({params}) => new Response(params.wild as string))
+)
+
+const test = suite(import.meta)
+
+test('root', async () => {
+  const response = await handle(new Request('http://localhost'))
+  test.is(await response?.text(), 'root')
+})
+
+test('param', async () => {
+  const response = await handle(new Request('http://localhost/param/123'))
+  test.is(await response?.text(), '123')
+})
+
+test('wildcard', async () => {
+  const response = await handle(
+    new Request('http://localhost/file/nested/image.png')
+  )
+  test.is(await response?.text(), 'nested/image.png')
+})
+
+test('compresses a response when the request accepts gzip', async () => {
+  const request = new Request('http://localhost', {
+    headers: {'accept-encoding': 'gzip, deflate'}
+  })
+  const response = compressResponse(request, new Response('hello'))
+
+  test.is(response.headers.get('content-encoding'), 'gzip')
+  test.is(response.headers.get('vary'), 'accept-encoding')
+  test.is(response.headers.get('content-length'), null)
+
+  const decompressed = response.body?.pipeThrough(
+    new DecompressionStream('gzip')
+  )
+  test.is(await new Response(decompressed).text(), 'hello')
+})
+
+test('does not compress partial responses', async () => {
+  const request = new Request('http://localhost/file', {
+    headers: {'accept-encoding': 'gzip'}
+  })
+  const response = compressResponse(
+    request,
+    new Response('partial', {
+      status: 206,
+      headers: {'content-range': 'bytes 0-6/12'}
+    })
+  )
+
+  test.is(response.status, 206)
+  test.is(response.headers.get('content-encoding'), null)
+  test.is(response.headers.get('content-range'), 'bytes 0-6/12')
+  test.is(await response.text(), 'partial')
+})

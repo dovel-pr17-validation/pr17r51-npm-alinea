@@ -1,0 +1,46 @@
+.LinkPicker-popover {
+  display: block;
+  box-sizing: border-box;
+  outline: none;
+  width: min(520px, calc(100vw - 32px));
+  min-width: min(360px, calc(100vw - 32px));
+  max-width: min(520px, calc(100vw - 32px));
+  height: min(350px, calc(var(--visual-viewport-height, 100dvh) - 32px));
+  max-height: min(350px, calc(var(--visual-viewport-height, 100dvh) - 32px));
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--alinea-border);
+  border-radius: var(--alinea-radius);
+  background: var(--alinea-bg);
+  box-shadow: var(--alinea-shadow-raised);
+}
+
+.LinkPickerCompact {
+  display: flex;
+  outline: none;
+  box-sizing: border-box;
+  min-height: 0;
+  height: 100%;
+  padding: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.LinkPickerCompact-parent {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--alinea-border);
+}
+
+.LinkPickerCompact-footer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px;
+  border-top: 1px solid var(--alinea-border);
+}

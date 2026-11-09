@@ -1,0 +1,297 @@
+import {Page as PageLayout, Spinner, Text} from '#/components.js'
+import type {Config} from '#/core/Config.js'
+import type {LocalConnection} from '#/core/Connection.js'
+import type {WriteableGraph} from '#/core/db/WriteableGraph.js'
+import type {User} from '#/core/User.js'
+import {styler} from '@alinea/styler'
+import {
+  atom,
+  Provider,
+  useAtom,
+  useAtomValueRaw,
+  useAtomValueRawSync,
+  type Getter
+} from 'jotai'
+import {
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  type ComponentType,
+  type ReactNode
+} from 'react'
+import css from './App.module.css'
+import {AccessDenied} from './app/AccessDenied.js'
+import {AuthView} from './app/AuthView.js'
+import {DashboardLayout} from './app/DashboardLayout.js'
+import {DashboardMeta} from './app/DashboardMeta.js'
+import {DashboardErrorBoundary} from './app/DashboardErrorBoundary.js'
+import {entryPage} from './app/pages/EntryPage.js'
+import {splashPage} from './app/pages/SplashPage.js'
+import {MissingRoot, rootPage} from './app/pages/RootPage.js'
+import {usersPage} from './app/pages/UsersPage.js'
+import {activityAtom, activityPendingAtom} from './atoms/activity.js'
+import {authAtom} from './atoms/auth.js'
+import {themeAtom} from './atoms/dashboard.js'
+import {workspaceAtom, workspacesAtom} from './atoms/config.js'
+import {useDashboardStore} from './atoms/core.js'
+import {entryAtoms, MissingEntryError} from './atoms/entry.js'
+import {graphReadyAtom, syncProgressAtom} from './atoms/graph.js'
+import {pageAtom, type Page} from './atoms/nav.js'
+import {rootAtoms} from './atoms/root.js'
+import {canManageMembersAtom, userPolicyReadyAtom} from './atoms/user.js'
+import {atomWithPending} from './atoms/utils.js'
+import {DashboardModelScope, type Dashboard} from './hooks.js'
+import './global.css'
+
+const styles = styler(css)
+
+export interface AppProps {
+  graph: WriteableGraph
+  events: EventTarget
+  config: Config
+  client: LocalConnection
+  views: Record<string, ComponentType>
+  local?: boolean
+  alineaDev?: boolean
+  /** The user shown as signed in when the dashboard runs locally */
+  user?: User
+}
+
+export const appAtom = atomWithPending(
+  atom(async get => {
+    const auth = get(authAtom)
+    if (auth.status === 'authenticated') return get(authenticatedAtom)
+    // The loading screen stays up while the session is checked and, kept by
+    // atomWithPending, through the first sync once it's authenticated
+    if (auth.status === 'loading') return undefined
+    return <AuthView />
+  })
+)
+
+const authenticatedAtom = atom(async get => {
+  await get(graphReadyAtom)
+  await get(userPolicyReadyAtom)
+  const canManageMembers = await get(canManageMembersAtom)
+  const page = get(pageAtom)
+  const {entry, workspace, root} = page
+  const workspaceData = workspace ? get(workspaceAtom(workspace)) : undefined
+  const meta = (label: string, plain = false): ReactNode => (
+    <DashboardMeta
+      color={plain ? '#6b7280' : (workspaceData?.color ?? '#7c3aed')}
+      icon={workspaceData?.icon}
+      plain={plain}
+      title={dashboardTitle(workspaceData?.label ?? 'Alinea', label)}
+    />
+  )
+
+  // An edit link is replaced by the route of its entry once it is found
+  if (page.type === 'edit') return new Promise<ReactNode>(() => {})
+
+  if (page.type === 'users') {
+    if (!canManageMembers) {
+      return (
+        <>
+          {meta('No user management access')}
+          <AccessDenied canManageMembers={false} scope="users" />
+        </>
+      )
+    }
+    const content = await usersPage(page, get)
+    return (
+      <>
+        {meta('Users')}
+        {content}
+      </>
+    )
+  }
+
+  if (page.type === 'splash') {
+    if (get(workspacesAtom).length === 0) {
+      return (
+        <>
+          {meta('No workspace access')}
+          <AccessDenied canManageMembers={canManageMembers} scope="workspace" />
+        </>
+      )
+    }
+    return (
+      <>
+        {meta('Workspaces', true)}
+        {await splashPage(get)}
+      </>
+    )
+  }
+
+  if (!workspace || !workspaceData) {
+    return (
+      <>
+        {meta('No workspace access')}
+        <AccessDenied canManageMembers={canManageMembers} scope="workspace" />
+      </>
+    )
+  }
+
+  if (!root) {
+    return (
+      <>
+        {meta('No root access')}
+        <AccessDenied canManageMembers={canManageMembers} scope="root" />
+      </>
+    )
+  }
+
+  const rootData = rootAtoms(workspace, root)
+  const {locale} = page
+
+  if (page.requestedRoot && page.requestedRoot !== root) {
+    const tree = await get(rootData.tree(locale).ready)
+    return (
+      <>
+        {meta('Root not found')}
+        <DashboardLayout
+          canManageMembers={canManageMembers}
+          page={page}
+          root={rootData}
+          tree={tree}
+          workspace={{...workspaceData, name: workspace}}
+        >
+          <MissingRoot
+            page={page}
+            requestedRoot={page.requestedRoot}
+            root={rootData}
+          />
+        </DashboardLayout>
+      </>
+    )
+  }
+
+  if (entry) {
+    const [content, title, tree] = await Promise.all([
+      entryPage(page, get),
+      entryTitle(page, entry, get),
+      get(rootData.tree(locale).ready)
+    ])
+    return (
+      <>
+        {meta(title)}
+        <DashboardLayout
+          canManageMembers={canManageMembers}
+          page={page}
+          root={rootData}
+          tree={tree}
+          workspace={{...workspaceData, name: workspace}}
+        >
+          {content}
+        </DashboardLayout>
+      </>
+    )
+  }
+
+  const [content, tree] = await Promise.all([
+    rootPage(page, get),
+    get(rootData.tree(locale).ready)
+  ])
+  return (
+    <>
+      {meta(get(rootData.label))}
+      <DashboardLayout
+        canManageMembers={canManageMembers}
+        page={page}
+        root={rootData}
+        tree={tree}
+        workspace={{...workspaceData, name: workspace}}
+      >
+        {content}
+      </DashboardLayout>
+    </>
+  )
+})
+
+export function App(props: AppProps) {
+  const store = useDashboardStore(props)
+  const dashboard = useMemo(
+    (): Dashboard => ({
+      graph: props.graph,
+      config: props.config,
+      events: props.events,
+      client: props.client,
+      views: props.views,
+      options: {alineaDev: props.alineaDev, local: props.local}
+    }),
+    [props]
+  )
+  return (
+    <Provider store={store}>
+      <DashboardModelScope dashboard={dashboard}>
+        <DashboardErrorBoundary>
+          <DashboardApp {...props} />
+        </DashboardErrorBoundary>
+      </DashboardModelScope>
+    </Provider>
+  )
+}
+
+function DashboardApp(props: AppProps): ReactNode {
+  const [appPending, app] = useAtomValueRawSync(appAtom)
+  // The app atom resolves once the next page's data is loaded, but components
+  // on that page (a preview component, a custom field view) may still suspend
+  // while mounting. Render the swap in the background so the current page
+  // stays on screen until the next one is complete, instead of suspending to
+  // the nearest boundary above the dashboard.
+  const shown = useDeferredValue(app)
+  const activity = useAtomValueRaw(activityAtom)
+  const sync = useAtomValueRaw(syncProgressAtom)
+  const [, setActivityPending] = useAtom(activityPendingAtom)
+  // Mounting the theme applies the stored preference to the document
+  useAtomValueRaw(themeAtom)
+  const pending =
+    appPending ||
+    shown !== app ||
+    activity.isMutating ||
+    activity.isSyncing ||
+    Boolean(sync)
+  useEffect(() => {
+    setActivityPending(pending)
+  }, [pending, setActivityPending])
+  return shown ?? <AppLoading />
+}
+
+const fileCount = new Intl.NumberFormat()
+
+export function AppLoading() {
+  const sync = useAtomValueRaw(syncProgressAtom)
+  const fetching = sync && sync.loaded < sync.total
+  return (
+    <PageLayout className={styles.AppLoading()}>
+      <div className={styles.AppLoading.progress()}>
+        <Spinner
+          aria-label="Loading dashboard"
+          value={
+            fetching ? Math.round((sync.loaded / sync.total) * 100) : undefined
+          }
+        />
+        {sync && (
+          <Text size="sm" color="muted" className={styles.AppLoading.status()}>
+            {fetching
+              ? `Syncing content · ${fileCount.format(sync.loaded)} of ${fileCount.format(sync.total)} files`
+              : 'Indexing content'}
+          </Text>
+        )}
+      </div>
+    </PageLayout>
+  )
+}
+
+async function entryTitle(page: Page, entryId: string, get: Getter) {
+  try {
+    const entry = await get(entryAtoms(entryId))
+    return (await get(entry.locales(page.locale).selectedEntry)).title
+  } catch (error) {
+    if (error instanceof MissingEntryError) return 'Entry not found'
+    throw error
+  }
+}
+
+function dashboardTitle(workspace: string, view: string) {
+  return workspace === view ? workspace : `${workspace}: ${view}`
+}

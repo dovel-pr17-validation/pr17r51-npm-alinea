@@ -1,0 +1,68 @@
+.BreadcrumbList {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--alinea-fg-muted);
+  font-size: var(--alinea-font-size-base);
+  line-height: 1.25rem;
+  overflow-wrap: anywhere;
+}
+
+.BreadcrumbItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.BreadcrumbLink {
+  color: inherit;
+  font: inherit;
+  text-decoration: none;
+  border-radius: var(--alinea-radius-sm);
+  outline: none;
+  cursor: pointer;
+  transition: color var(--alinea-transition);
+
+  @media (hover: hover) {
+    &:hover {
+      color: var(--alinea-fg-strong);
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--alinea-ring);
+    outline-offset: 2px;
+  }
+}
+
+.BreadcrumbPage {
+  color: var(--alinea-fg-strong);
+  font-weight: 500;
+}
+
+.BreadcrumbSeparator {
+  display: inline-flex;
+  align-items: center;
+}
+
+.BreadcrumbSeparator-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.BreadcrumbEllipsis {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+}
+
+.BreadcrumbEllipsis-icon {
+  width: 16px;
+  height: 16px;
+}

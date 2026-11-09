@@ -1,0 +1,32 @@
+.root {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 0;
+  border-block: 1px solid var(--web-outline);
+  color: var(--web-foreground);
+  transition: color 0.15s ease-out;
+
+  &:hover {
+    color: var(--web-accent);
+  }
+
+  &:focus-visible {
+    border-radius: 4px;
+    outline: 2px solid var(--web-accent);
+    outline-offset: 2px;
+  }
+
+  &-title {
+    font-size: 15.5px;
+    font-weight: 500;
+    line-height: 1.5;
+  }
+
+  &-icon {
+    flex-shrink: 0;
+    font-size: 18px;
+    color: var(--web-accent);
+  }
+}

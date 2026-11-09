@@ -1,0 +1,6 @@
+/* The dialog only resets its focus outline and fills a surface that was
+   given a fixed height */
+.PopoverContent-dialog {
+  height: 100%;
+  outline: none;
+}

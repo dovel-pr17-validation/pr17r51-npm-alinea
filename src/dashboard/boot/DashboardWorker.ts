@@ -1,0 +1,701 @@
+import type {Config} from '#/core/Config.js'
+import type {LocalConnection} from '#/core/Connection.js'
+import {Entry} from '#/core/Entry.js'
+import type {GraphQuery} from '#/core/Graph.js'
+import {createId} from '#/core/Id.js'
+import {getScope} from '#/core/Scope.js'
+import {trigger} from '#/core/Trigger.js'
+import type {
+  EntryReferenceQuery,
+  EntryReferenceResult
+} from '#/core/db/EntryReference.js'
+import {IndexEvent} from '#/core/db/IndexEvent.js'
+import type {SyncProgress} from '#/core/db/LocalStore.js'
+import type {Mutation} from '#/core/db/Mutation.js'
+import {EntryUrlConflictError} from '#/core/db/EntryUrlConflictError.js'
+import type {Source} from '#/core/source/Source.js'
+import {
+  BrowserEntryStore,
+  isCorruptDatabaseError
+} from '#/database/BrowserEntryStore.js'
+import {EntryStore} from '#/database/EntryStore.js'
+import pLimit from 'p-limit'
+import {
+  type Activity,
+  ActivityEvent,
+  type ActivityOperation,
+  type ActivityTarget
+} from './ActivityEvent.js'
+import {SyncEvent} from './SyncEvent.js'
+
+const remote = pLimit(1)
+const cacheName = 'alinea-entry-database'
+const syncInterval = 120_000
+// Progress arrives per fetched file, pages need only a few updates a second
+const progressInterval = 100
+
+interface QueuedMutation {
+  id: string
+  mutations: Array<Mutation>
+  activity: Activity
+  attempt: number
+  sha?: string
+}
+
+interface LoadedDashboard {
+  db: EntryStore
+  client: LocalConnection
+  cacheFailure?: CacheFailure
+  /** The store opened with content it can show before syncing. */
+  stored: boolean
+  caughtUp?: Promise<void>
+}
+
+interface CacheFailure {
+  error: unknown
+}
+
+const activityHistoryLimit = 100
+
+export class DashboardWorker extends EventTarget {
+  #source: Source | undefined
+  #localDB: EntryStore | undefined
+  #localClient: LocalConnection | undefined
+  #nextLoad = trigger<LoadedDashboard>()
+  #defer: (() => Promise<void>) | undefined
+  #currentRevision: string | undefined
+  #mutations: Array<QueuedMutation> = []
+  #activities: Array<Activity> = []
+  #local = pLimit(1)
+  #blocked = false
+  #syncInterval: ReturnType<typeof setInterval> | undefined
+
+  /** Keep the content in memory with `source`, instead of in the browser. */
+  constructor(source?: Source) {
+    super()
+    this.#source = source
+  }
+
+  get db() {
+    return this.#localDB ?? this.#nextLoad.then(res => res.db)
+  }
+
+  get #client() {
+    return this.#localClient ?? this.#nextLoad.then(res => res.client)
+  }
+
+  async sync(): Promise<string> {
+    const load = this.#nextLoad
+    try {
+      return await this.#syncLoaded(load)
+    } catch (error) {
+      // A load that superseded this store mid-sync closed it; sync the
+      // replacement instead of surfacing the closed store.
+      const superseded =
+        this.#nextLoad !== load &&
+        (await load.then(
+          loaded => loaded.db.closed,
+          () => false
+        ))
+      if (superseded) return this.sync()
+      throw error
+    }
+  }
+
+  /**
+   * Resolve once the dashboard can show content. Stored content shows right
+   * away and catches up with the remote as an activity; an empty store, or
+   * one whose cached content failed, waits for its first sync.
+   */
+  async ready(): Promise<void> {
+    const loaded = await this.#nextLoad
+    if (!loaded.stored) return void (await this.sync())
+    // Once per store: another tab of the shared worker shows the same catch-up
+    if (!loaded.caughtUp) return void (loaded.caughtUp = this.#catchUp())
+    // A graph replaced on the same store, as on a dev server refetch after
+    // content changed on disk, still has to fetch those changes
+    this.sync().catch(() => {
+      // Background sync failures are silent and retried on the next interval.
+    })
+  }
+
+  #catchUp(): Promise<void> {
+    const activity: Activity = {
+      id: createId(),
+      type: 'sync',
+      status: 'running',
+      operations: [{op: 'sync'}],
+      startedAt: Date.now()
+    }
+    this.#activities.unshift(activity)
+    return this.#syncActivities([activity])
+  }
+
+  async #syncActivities(activities: Array<Activity>): Promise<void> {
+    for (const activity of activities) {
+      activity.status = 'running'
+      activity.finishedAt = undefined
+      activity.error = undefined
+    }
+    this.#emitActivity()
+    try {
+      await this.sync()
+    } catch (error) {
+      // Another sync may have settled them meanwhile
+      for (const activity of activities)
+        if (activity.status === 'running') this.#failActivity(activity, error)
+      // The interval sync keeps trying: the first that succeeds settles them
+      this.#startSyncing()
+    }
+  }
+
+  /** Content that synced is caught up: settle the catch-up activities. */
+  #settleSyncs() {
+    const syncs = this.#activities.filter(
+      activity =>
+        activity.type === 'sync' &&
+        (activity.status === 'running' || activity.status === 'failed')
+    )
+    if (syncs.length === 0) return
+    const finishedAt = Date.now()
+    for (const activity of syncs) {
+      activity.status = 'succeeded'
+      activity.finishedAt = finishedAt
+      activity.error = undefined
+    }
+    this.#trimActivities()
+    this.#emitActivity()
+  }
+
+  async #syncLoaded(load: Promise<LoadedDashboard>): Promise<string> {
+    const loaded = await load
+    const {db, client} = loaded
+    return this.#local(async () => {
+      let revision: string
+      try {
+        revision = await remote(() => this.#syncWithClient(db, client))
+      } catch (error) {
+        if (loaded.cacheFailure) {
+          const cached = errorMessage(loaded.cacheFailure.error)
+          const remote = errorMessage(error)
+          throw new AggregateError(
+            [loaded.cacheFailure.error, error],
+            `Failed to load cached content and fetch remote updates\nCached content: ${cached}\nRemote updates: ${remote}`
+          )
+        }
+        throw error
+      }
+      loaded.cacheFailure = undefined
+      this.#startSyncing()
+      return revision
+    })
+  }
+
+  sha(): Promise<string> {
+    return this.#withDb(db => db.sha)
+  }
+
+  async queue(id: string, mutations: Array<Mutation>): Promise<string> {
+    if (this.#blocked) await this.discardActivity()
+    return this.#local(async () => {
+      const db = await this.db
+      if (this.#blocked) {
+        throw new Error('Resolve the sync error before making more changes')
+      }
+      const summary = await summarizeMutations(db, mutations)
+      const activity: Activity = {
+        id,
+        type: 'mutation',
+        status: 'pending',
+        operations: summary.operations,
+        target: summary.target,
+        startedAt: Date.now()
+      }
+      const item: QueuedMutation = {
+        id,
+        mutations,
+        activity,
+        attempt: 0
+      }
+      this.#activities.unshift(activity)
+      this.#mutations.push(item)
+      this.#emitActivity()
+      try {
+        item.sha = (await db.mutate(mutations)).sha
+        this.#emitActivity()
+        void this.#flush(item)
+        return item.sha
+      } catch (error) {
+        if (error instanceof EntryUrlConflictError) {
+          this.#cancelMutation(item, error)
+          throw error
+        }
+        this.#blocked = true
+        this.#failActivity(activity, error)
+        throw error
+      }
+    })
+  }
+
+  async retryActivity(): Promise<void> {
+    const syncs = this.#activities.filter(
+      activity => activity.type === 'sync' && activity.status === 'failed'
+    )
+    if (syncs.length > 0) await this.#syncActivities(syncs)
+    if (this.#blocked) await this.#retryMutations()
+  }
+
+  async #retryMutations(): Promise<void> {
+    await this.#local(async () => {
+      const db = await this.db
+      this.#blocked = false
+      for (const item of this.#mutations) {
+        item.attempt += 1
+        item.activity.status = 'pending'
+        item.activity.finishedAt = undefined
+        item.activity.error = undefined
+        if (!item.sha) {
+          try {
+            item.sha = (await db.mutate(item.mutations)).sha
+          } catch (error) {
+            this.#blocked = true
+            this.#failActivity(item.activity, error)
+            throw error
+          }
+        }
+      }
+    })
+    this.#emitActivity()
+    await Promise.all(this.#mutations.map(item => this.#flush(item)))
+  }
+
+  async discardActivity(): Promise<void> {
+    await this.#local(async () => {
+      if (this.#mutations.length === 0) return
+      const db = await this.db
+      const client = await this.#client
+      for (const item of this.#mutations) item.attempt += 1
+      await this.#syncWithClient(db, client)
+      this.#blocked = false
+      const finishedAt = Date.now()
+      for (const item of this.#mutations) {
+        item.activity.status = 'discarded'
+        item.activity.finishedAt = finishedAt
+        item.activity.error = undefined
+      }
+      this.#mutations = []
+      this.#trimActivities()
+      this.#emitActivity()
+    })
+  }
+
+  #flush(item: QueuedMutation): Promise<void> {
+    const attempt = item.attempt
+    return remote(async () => {
+      if (item.attempt !== attempt) return
+      if (this.#blocked) {
+        item.activity.status = 'blocked'
+        this.#emitActivity()
+        return
+      }
+      if (item.activity.status === 'failed') return
+      item.activity.status = 'running'
+      this.#emitActivity()
+      const client = await this.#client
+      const db = await this.db
+      try {
+        const {sha} = await client.mutate(item.mutations)
+        if (remote.pendingCount === 0 && sha !== item.sha)
+          await this.#syncWithClient(db, client)
+        this.#completeMutation(item)
+      } catch (error) {
+        let revision: string | undefined
+        try {
+          revision = await this.#syncWithClient(db, client)
+        } catch {
+          // The recovery sync failure is silent and retried later.
+        }
+        // A commit can land while its response is lost. The remote then has
+        // exactly the content the mutations made here: committing them again
+        // would fail on a created id or commit them twice.
+        if (revision && revision === item.sha)
+          return this.#completeMutation(item)
+        this.#blocked = true
+        this.#failActivity(item.activity, error)
+        if (revision) item.sha = undefined
+      }
+    })
+  }
+
+  #completeMutation(item: QueuedMutation) {
+    item.activity.status = 'succeeded'
+    item.activity.finishedAt = Date.now()
+    item.activity.error = undefined
+    this.#mutations = this.#mutations.filter(entry => entry !== item)
+    this.#trimActivities()
+    this.#emitActivity()
+  }
+
+  #cancelMutation(item: QueuedMutation, error: unknown) {
+    item.activity.status = 'cancelled'
+    item.activity.finishedAt = Date.now()
+    item.activity.error = errorMessage(error)
+    this.#mutations = this.#mutations.filter(entry => entry !== item)
+    this.#trimActivities()
+    this.#emitActivity()
+  }
+
+  activities(): Array<Activity> {
+    return this.#activities.map(activity => ({
+      ...activity,
+      target: activity.target ? {...activity.target} : undefined,
+      operations: activity.operations.map(operation => ({...operation}))
+    }))
+  }
+
+  #emitActivity() {
+    this.dispatchEvent(new ActivityEvent(this.activities()))
+  }
+
+  async #syncWithClient(db: EntryStore, client: LocalConnection) {
+    // Fetch syncs are intentionally not recorded as activities: they run on
+    // every load and on an interval, so history rows would just be noise.
+    // Failures throw to the caller and background syncs retry on the next
+    // interval. Only the catch-up of stored content that shows before its
+    // first sync is recorded, see ready(). Without stored content the first
+    // sync blocks graph readiness, so it surfaces as a load error.
+    let reported = 0
+    const onProgress = (progress: SyncProgress) => {
+      const now = Date.now()
+      const done = progress.loaded >= progress.total
+      if (!done && now - reported < progressInterval) return
+      reported = now
+      this.dispatchEvent(new SyncEvent(progress))
+    }
+    try {
+      const revision = await db.syncWith(client, {validate: false, onProgress})
+      this.#settleSyncs()
+      return revision
+    } finally {
+      if (reported) this.dispatchEvent(new SyncEvent())
+    }
+  }
+
+  #failActivity(activity: Activity, error: unknown) {
+    activity.status = 'failed'
+    activity.finishedAt = Date.now()
+    activity.error = errorMessage(error)
+    this.#emitActivity()
+  }
+
+  #trimActivities() {
+    let excess = this.#activities.length - activityHistoryLimit
+    for (let index = this.#activities.length - 1; excess > 0; index--) {
+      if (index < 0) break
+      const activity = this.#activities[index]
+      if (
+        activity.status === 'pending' ||
+        activity.status === 'running' ||
+        activity.status === 'blocked' ||
+        activity.status === 'failed'
+      )
+        continue
+      this.#activities.splice(index, 1)
+      excess -= 1
+    }
+  }
+
+  resolve(raw: string): Promise<unknown> {
+    return this.#withDb(db => {
+      const scope = getScope(db.config)
+      const query = scope.parse<GraphQuery>(raw)
+      return db.resolve(query)
+    })
+  }
+
+  referencesTo(query: EntryReferenceQuery): Promise<EntryReferenceResult> {
+    return this.#withDb(db => db.referencesTo(query))
+  }
+
+  /**
+   * Run against the current store, and once more against its replacement
+   * when a load superseded the store mid-flight and closed it.
+   */
+  async #withDb<T>(run: (db: EntryStore) => Promise<T>): Promise<T> {
+    const db = await this.db
+    try {
+      return await run(db)
+    } catch (error) {
+      const current = await this.db
+      if (!db.closed || current === db) throw error
+      return run(current)
+    }
+  }
+
+  async load(revision: string, config: Config, client: LocalConnection) {
+    if (this.#currentRevision === revision) return
+    this.#currentRevision = revision
+    const hadPrevious = this.#localDB !== undefined
+    const nextLoad = this.#localDB ? trigger<LoadedDashboard>() : this.#nextLoad
+    this.#nextLoad = nextLoad
+    this.#localDB = undefined
+    this.#localClient = undefined
+    try {
+      let db = await this.#open(config, revision, false)
+      // The replaced store closes in the background: awaiting it here would
+      // stall the replacement behind the old store's in-flight work.
+      if (this.#defer)
+        void this.#defer().catch(() => {
+          // The replaced database finishes outstanding work before closing.
+        })
+      this.#defer = undefined
+      let cacheFailure = await this.#syncLocalIndex(db)
+      // Damaged cached content is not shown: start over from the remote.
+      if (cacheFailure && isCorruptDatabaseError(cacheFailure.error)) {
+        await db.close()
+        db = await this.#open(config, revision, true)
+        cacheFailure = await this.#syncLocalIndex(db)
+      }
+      // A replacement without cached content syncs before it takes over, so
+      // the dashboard never swaps from a populated store to an empty one.
+      // This runs outside the shared remote slot: a sync of the superseded
+      // store may still hold it, and that one must not block the swap.
+      const empty = (await db.source.getTree()).isEmpty
+      if (hadPrevious && empty)
+        await this.#syncWithClient(db, client).catch(() => {
+          // The page's own sync surfaces the failure once the store is live.
+        })
+      this.#localDB = db
+      this.#localClient = client
+      nextLoad.resolve({
+        db,
+        client,
+        cacheFailure,
+        stored: !cacheFailure && !empty
+      })
+      const unsubscribe = db.onChange(change => {
+        this.dispatchEvent(
+          new IndexEvent({
+            op: 'index',
+            sha: change.revision,
+            ids: [...change.changedEntryIds]
+          })
+        )
+      })
+      this.#defer = async () => {
+        unsubscribe()
+        await db.close()
+      }
+    } catch (cause) {
+      this.#currentRevision = undefined
+      this.#nextLoad = trigger()
+      nextLoad.reject(new Error('Failed to load database', {cause}))
+      throw cause
+    }
+  }
+
+  #open(
+    config: Config,
+    fingerprint: string,
+    reset: boolean
+  ): Promise<EntryStore> {
+    if (this.#source) return EntryStore.memory(config, this.#source)
+    return BrowserEntryStore.open(config, {name: cacheName, fingerprint, reset})
+  }
+
+  async #syncLocalIndex(db: EntryStore): Promise<CacheFailure | undefined> {
+    const sourceTree = await db.source.getTree()
+    if (sourceTree.isEmpty) return
+    try {
+      await db.sync()
+    } catch (error) {
+      return {error}
+    }
+  }
+
+  #startSyncing() {
+    if (this.#syncInterval) return
+    const sync = () => {
+      void this.sync().catch(() => {
+        // Background sync failures are silent and retried on the next interval.
+      })
+    }
+    this.#syncInterval = setInterval(sync, syncInterval)
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+interface MutationTitleRow {
+  id: string
+  locale: string | null
+  status: string
+  title: string
+  workspace: string
+  root: string
+}
+
+interface MutationActivitySummary {
+  operations: Array<ActivityOperation>
+  target?: ActivityTarget
+}
+
+async function summarizeMutations(
+  db: EntryStore,
+  mutations: Array<Mutation>
+): Promise<MutationActivitySummary> {
+  const targets = mutations.flatMap(mutation =>
+    'id' in mutation && mutation.id ? [mutation.id] : []
+  )
+  const rows =
+    targets.length > 0
+      ? await db.find({
+          select: {
+            id: Entry.id,
+            locale: Entry.locale,
+            status: Entry.status,
+            title: Entry.title,
+            workspace: Entry.workspace,
+            root: Entry.root
+          },
+          id: {in: targets},
+          status: 'all'
+        })
+      : []
+  const titleRows = rows as Array<MutationTitleRow>
+  return {
+    operations: mutations.map(mutation => mutationSummary(mutation, titleRows)),
+    target: activityTarget(mutations, titleRows)
+  }
+}
+
+function activityTarget(
+  mutations: Array<Mutation>,
+  rows: Array<MutationTitleRow>
+): ActivityTarget | undefined {
+  const targets: Array<ActivityTarget> = []
+  for (const mutation of mutations) {
+    if (mutation.op === 'remove') return
+    if (mutation.op === 'uploadFile' || mutation.op === 'removeFile') continue
+    if (!mutation.id) return
+    const row = mutationRow(mutation, rows)
+    const workspace = mutation.op === 'create' ? mutation.workspace : undefined
+    const root = mutation.op === 'create' ? mutation.root : undefined
+    const targetWorkspace = workspace ?? row?.workspace
+    const targetRoot = root ?? row?.root
+    if (!targetWorkspace || !targetRoot) return
+    targets.push({
+      workspace: targetWorkspace,
+      root: targetRoot,
+      entry: mutation.id,
+      locale: 'locale' in mutation ? mutation.locale : row?.locale
+    })
+  }
+  const unique = new Map(
+    targets.map(target => [
+      `${target.workspace}\0${target.root}\0${target.entry}\0${target.locale ?? ''}`,
+      target
+    ])
+  )
+  return unique.size === 1 ? unique.values().next().value : undefined
+}
+
+function mutationSummary(
+  mutation: Mutation,
+  rows: Array<MutationTitleRow>
+): ActivityOperation {
+  switch (mutation.op) {
+    case 'create':
+      return {
+        op: mutation.op,
+        target: mutation.id,
+        title: titleFromData(mutation.data) ?? titleForMutation(mutation, rows),
+        locale: mutation.locale,
+        status: mutation.status
+      }
+    case 'update':
+      return {
+        op: mutation.op,
+        target: mutation.id,
+        title: titleFromData(mutation.set) ?? titleForMutation(mutation, rows),
+        locale: mutation.locale,
+        status: mutation.status
+      }
+    case 'remove':
+      return {
+        op: mutation.op,
+        target: mutation.id,
+        title: titleForMutation(mutation, rows),
+        locale: mutation.locale,
+        status: mutation.status
+      }
+    case 'publish':
+      return {
+        op: mutation.op,
+        target: mutation.id,
+        title: titleForMutation(mutation, rows),
+        locale: mutation.locale,
+        status: mutation.status
+      }
+    case 'unpublish':
+    case 'archive':
+      return {
+        op: mutation.op,
+        target: mutation.id,
+        title: titleForMutation(mutation, rows),
+        locale: mutation.locale
+      }
+    case 'move':
+      return {
+        op: mutation.op,
+        target: mutation.id,
+        title: titleForMutation(mutation, rows)
+      }
+    case 'uploadFile':
+      return {
+        op: mutation.op,
+        target: mutation.location,
+        title: fileTitle(mutation.location)
+      }
+    case 'removeFile':
+      return {
+        op: mutation.op,
+        target: mutation.location,
+        title: fileTitle(mutation.location)
+      }
+  }
+}
+
+function titleFromData(data: Record<string, unknown>): string | undefined {
+  return typeof data.title === 'string' && data.title.trim()
+    ? data.title.trim()
+    : undefined
+}
+
+function titleForMutation(
+  mutation: {id?: string; locale?: string | null; status?: string},
+  rows: Array<MutationTitleRow>
+): string | undefined {
+  return mutationRow(mutation, rows)?.title
+}
+
+function mutationRow(
+  mutation: {id?: string; locale?: string | null; status?: string},
+  rows: Array<MutationTitleRow>
+): MutationTitleRow | undefined {
+  if (!mutation.id) return
+  return (
+    rows.find(
+      row =>
+        row.id === mutation.id &&
+        (!('locale' in mutation) || row.locale === mutation.locale) &&
+        (!('status' in mutation) || row.status === mutation.status)
+    ) ?? rows.find(row => row.id === mutation.id)
+  )
+}
+
+function fileTitle(location: string): string {
+  return location.split('/').pop() || location
+}

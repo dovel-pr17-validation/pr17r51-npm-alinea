@@ -1,0 +1,66 @@
+@use '@/style' as *;
+
+.root {
+  display: grid;
+  grid-template-columns: 480px minmax(0, 1fr);
+  align-items: center;
+  gap: 64px;
+  color: var(--web-foreground);
+  text-decoration: none;
+
+  @include sm {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 28px;
+  }
+
+  &-cover {
+    aspect-ratio: 16 / 9;
+  }
+
+  &-content {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-width: 560px;
+  }
+
+  &-title {
+    margin: 0;
+    font-family: var(--web-title-font);
+    font-weight: 500;
+    font-size: 32px;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    transition: color 0.15s ease-out;
+
+    @include sm {
+      font-size: 26px;
+    }
+  }
+
+  &:is(:hover, :focus-visible) &-title {
+    color: var(--web-accent);
+  }
+
+  &-introduction {
+    margin: 4px 0 0;
+    font-size: 17px;
+    line-height: 1.6;
+    color: var(--web-foreground-faded);
+
+    @include sm {
+      font-size: 16px;
+    }
+  }
+
+  &-read {
+    padding-top: 8px;
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--web-accent);
+  }
+
+  &:hover &-read {
+    color: var(--web-accent-strong);
+  }
+}

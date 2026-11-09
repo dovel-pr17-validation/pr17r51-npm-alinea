@@ -1,0 +1,169 @@
+/*
+  Tokens apply inside an element with data-alinea-theme, so the stylesheet
+  can be loaded on a page without restyling it. The dashboard sets it on
+  <html>; overlays that render outside of it (popovers, dialogs, tooltips)
+  set it on themselves. Palette and inputs are declared on the outermost
+  themed element only, so a theme set on it is inherited by nested ones.
+*/
+
+/* The document follows the system color scheme unless data-theme is set */
+:root[data-alinea-theme] {
+  color-scheme: light dark;
+}
+
+/* Color palette, only read by the default theme below */
+:where([data-alinea-theme]:not([data-alinea-theme] *)) {
+  --alinea-gray-0: #ffffff;
+  --alinea-gray-50: #f9fafb;
+  --alinea-gray-100: #f3f4f7;
+  --alinea-gray-200: #e7e8ec;
+  --alinea-gray-300: #d1d5dc;
+  --alinea-gray-400: #99a1af;
+  --alinea-gray-500: #6a7282;
+  --alinea-gray-600: #4a5565;
+  --alinea-gray-700: #364153;
+  --alinea-gray-800: #1e2939;
+  --alinea-gray-900: #101828;
+
+  --alinea-blue-50: #edeefe;
+  --alinea-blue-100: #d9dbfd;
+  --alinea-blue-200: #c5c8fc;
+  --alinea-blue-300: #b1b5fb;
+  --alinea-blue-400: #9da3fa;
+  --alinea-blue-500: #8890f9;
+  --alinea-blue-600: #747df8;
+  --alinea-blue-700: #606af7;
+  --alinea-blue-800: #4c57f6;
+  --alinea-blue-900: #414ad1;
+
+  --alinea-red-50: #ffebee;
+  --alinea-red-200: #ef9a9a;
+  --alinea-red-300: #f7928f;
+  --alinea-red-400: #ef5350;
+  --alinea-red-500: #f44336;
+  --alinea-red-600: #e53935;
+
+  --alinea-yellow-50: #fff8e1;
+  --alinea-yellow-200: #ffe082;
+  --alinea-yellow-400: #ffca28;
+  --alinea-yellow-500: #ffc107;
+  --alinea-yellow-600: #ffb300;
+
+  --alinea-orange-50: #fcf5ee;
+  --alinea-orange-100: #f9eadb;
+  --alinea-orange-200: #f1d3b7;
+  --alinea-orange-700: #a74527;
+  --alinea-orange-800: #863926;
+
+  --alinea-green-50: #ecfdf5;
+  --alinea-green-100: #d0fae5;
+  --alinea-green-200: #a4f4cf;
+  --alinea-green-300: #5ee9b5;
+  --alinea-green-400: #00d492;
+  --alinea-green-500: #00bc7d;
+  --alinea-green-600: #009966;
+  --alinea-green-700: #007a55;
+  --alinea-green-800: #006045;
+}
+
+/*
+  Theme inputs. A theme only needs to set these, as light-dark() pairs where
+  the value differs per color scheme. Everything else is derived from them.
+*/
+:where([data-alinea-theme]:not([data-alinea-theme] *)) {
+  --alinea-font: 'Inter', sans-serif;
+  --alinea-mono-font: 'JetBrains Mono', monospace;
+  --alinea-font-size-base: 0.8125rem;
+  --alinea-radius: 8px;
+
+  --alinea-backdrop: light-dark(var(--alinea-gray-100), var(--alinea-gray-900));
+  --alinea-bg: light-dark(var(--alinea-gray-0), var(--alinea-gray-800));
+  --alinea-fg: light-dark(var(--alinea-gray-700), var(--alinea-gray-200));
+  --alinea-border: light-dark(var(--alinea-gray-200), var(--alinea-gray-700));
+
+  --alinea-primary: light-dark(var(--alinea-blue-800), var(--alinea-blue-500));
+  --alinea-primary-fg: light-dark(var(--alinea-gray-50), var(--alinea-gray-900));
+  --alinea-danger: light-dark(var(--alinea-red-400), var(--alinea-red-500));
+  --alinea-danger-fg: light-dark(var(--alinea-gray-50), var(--alinea-gray-900));
+  --alinea-warning: light-dark(var(--alinea-yellow-400), var(--alinea-yellow-500));
+  --alinea-warning-fg: var(--alinea-gray-900);
+  --alinea-success: light-dark(var(--alinea-green-600), var(--alinea-green-500));
+  --alinea-ring: var(--alinea-blue-500);
+  /* The color option of the current workspace, set by the dashboard */
+  --alinea-workspace-color: var(--alinea-primary);
+}
+
+/*
+  Derived tokens. Declared on every themed element so they are recomputed
+  from the inputs a nested [data-alinea-theme] overrides.
+*/
+[data-alinea-theme] {
+  --alinea-transition: 0.2s ease-out;
+  --alinea-radius-sm: calc(var(--alinea-radius) / 2);
+  --alinea-radius-lg: calc(var(--alinea-radius) * 1.5);
+  --alinea-radius-xl: calc(var(--alinea-radius) * 2);
+
+  --alinea-fg-strong: color-mix(in oklab, var(--alinea-fg) 70%, CanvasText);
+  --alinea-fg-muted: color-mix(in oklab, var(--alinea-fg) 85%, var(--alinea-bg));
+  --alinea-fg-disabled: color-mix(in oklab, var(--alinea-fg) 45%, var(--alinea-bg));
+  --alinea-field-label: color-mix(in oklab, var(--alinea-fg) 42%, var(--alinea-bg));
+
+  --alinea-bg-muted: color-mix(in oklab, var(--alinea-bg) 97%, var(--alinea-fg));
+  --alinea-muted: color-mix(in oklab, var(--alinea-bg) 92%, var(--alinea-fg));
+  --alinea-input: var(--alinea-bg);
+  --alinea-overlay: var(--alinea-bg);
+  --alinea-border-strong: color-mix(in oklab, var(--alinea-border) 70%, var(--alinea-fg));
+  --alinea-scrim: color-mix(in oklab, black 45%, transparent);
+
+  --alinea-primary-subtle: color-mix(in oklab, var(--alinea-primary) 12%, var(--alinea-bg));
+  --alinea-primary-subtle-fg: color-mix(in oklab, var(--alinea-primary) 80%, var(--alinea-fg));
+  --alinea-selected: color-mix(in oklab, var(--alinea-primary) 10%, var(--alinea-bg));
+  --alinea-selected-fg: var(--alinea-primary-subtle-fg);
+  --alinea-danger-subtle: color-mix(in oklab, var(--alinea-danger) 14%, var(--alinea-bg));
+  --alinea-danger-subtle-fg: color-mix(in oklab, var(--alinea-danger) 80%, var(--alinea-fg));
+  --alinea-warning-subtle: color-mix(in oklab, var(--alinea-warning) 18%, var(--alinea-bg));
+  /* Yellow is light, in light mode it needs a darker base to stay readable */
+  --alinea-warning-subtle-fg: light-dark(
+    color-mix(in oklab, var(--alinea-warning) 50%, var(--alinea-gray-900)),
+    color-mix(in oklab, var(--alinea-warning) 55%, var(--alinea-fg))
+  );
+  --alinea-success-subtle: color-mix(in oklab, var(--alinea-success) 16%, var(--alinea-bg));
+  --alinea-success-subtle-fg: color-mix(in oklab, var(--alinea-success) 70%, var(--alinea-fg));
+
+  /* Entry statuses are more vivid than the subtle tones so they stand out,
+     in dark mode they are tints so they do not outshine the selection */
+  --alinea-status-published: light-dark(
+    var(--alinea-green-300),
+    color-mix(in oklab, var(--alinea-green-500) 30%, var(--alinea-bg))
+  );
+  --alinea-status-published-fg: light-dark(var(--alinea-green-800), var(--alinea-green-100));
+  --alinea-status-draft: light-dark(
+    var(--alinea-blue-50),
+    color-mix(in oklab, var(--alinea-blue-500) 30%, var(--alinea-bg))
+  );
+  --alinea-status-draft-fg: light-dark(var(--alinea-blue-800), var(--alinea-blue-50));
+  --alinea-status-unpublished: light-dark(
+    var(--alinea-orange-50),
+    color-mix(in oklab, var(--alinea-orange-700) 30%, var(--alinea-bg))
+  );
+  --alinea-status-unpublished-fg: light-dark(
+    var(--alinea-orange-700),
+    color-mix(in oklab, var(--alinea-orange-700) 30%, var(--alinea-orange-200))
+  );
+
+  --alinea-shadow-raised: 0 1px 3.5px rgb(0 0 0 / 8%);
+  --alinea-shadow-muted:
+    0 1px 3.5px rgb(0 0 0 / 10%), 0 1px 1px rgb(0 0 0 / 6%),
+    0 0 0 1px light-dark(transparent, var(--alinea-border)),
+    0 6px 16px light-dark(transparent, rgb(0 0 0 / 38%));
+  --alinea-shadow-tooltip: 0 8px 20px rgb(0 0 0 / 10%);
+  --alinea-shadow-modal: 0 2px 13px rgb(0 0 0 / 11%);
+}
+
+[data-alinea-theme][data-theme='light'] {
+  color-scheme: light;
+}
+
+[data-alinea-theme][data-theme='dark'] {
+  color-scheme: dark;
+}

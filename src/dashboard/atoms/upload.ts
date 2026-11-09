@@ -1,0 +1,490 @@
+import {Config} from '#/core/Config.js'
+import {Entry} from '#/core/Entry.js'
+import {compressPdf} from '#/core/media/CompressPdf.browser.js'
+import {createPreview} from '#/core/media/CreatePreview.browser.js'
+import {
+  isTransformableImage,
+  type ImageEdit
+} from '#/core/media/ImageTransform.js'
+import {isImage} from '#/core/media/IsImage.js'
+import {FileData} from '#/core/media/MediaTypes.js'
+import {isPdf} from '#/core/media/Pdf.js'
+import {transformImage} from '#/core/media/TransformImage.browser.js'
+import {createId} from '#/core/Id.js'
+import {Type} from '#/core/Type.js'
+import {Permission} from '#/core/Role.js'
+import {createFileHash} from '#/core/util/ContentHash.js'
+import {basename, extname} from '#/core/util/Paths.js'
+import {slugify} from '#/core/util/Slugs.js'
+import {atom} from 'jotai'
+import {uploadProgressAtom} from './activity.js'
+import {configAtom, graphAtom} from './core.js'
+import {uploadSizeError} from './utils.js'
+import {policyAtom, userAtom} from './user.js'
+
+export interface UploadDestination {
+  workspace: string
+  root: string
+  parentId?: string
+  parents?: Array<string>
+}
+
+export interface UploadItem {
+  file: File
+  /** The file type the upload becomes, see `UploadQuery.type` */
+  type?: string
+  edit?: ImageEdit
+  /** The media entry whose file this upload replaces */
+  replaceId?: string
+  /** Recompress the images of a pdf, unless false */
+  compress?: boolean
+}
+
+export interface UploadFilesRequest extends UploadDestination {
+  uploads: Array<UploadItem>
+}
+
+/** Uploads files, resolves with the ids of the uploaded media entries */
+export const uploadFilesAtom = atom(
+  null,
+  async (get, set, request: UploadFilesRequest): Promise<Array<string>> => {
+    if (request.uploads.length === 0) return []
+    const config = get(configAtom)
+    const graph = get(graphAtom)
+    get(policyAtom).assert(Permission.Upload, {
+      workspace: request.workspace,
+      root: request.root,
+      id: request.parentId,
+      parents: request.parents
+    })
+    const destination = {
+      workspace: request.workspace,
+      root: request.root,
+      parentId: request.parentId
+    }
+    const invalidUploads = request.uploads.flatMap(({file, compress}) => {
+      const error = uploadSizeError(file, config, compress !== false)
+      return error ? [{id: createId(), file, error}] : []
+    })
+    if (invalidUploads.length > 0)
+      set(uploadProgressAtom, {
+        type: 'fail',
+        uploads: invalidUploads,
+        destination
+      })
+    const failedFiles = new Set(invalidUploads.map(upload => upload.file))
+    const uploads = request.uploads
+      .filter(upload => !failedFiles.has(upload.file))
+      .map(upload => ({...upload, id: createId()}))
+    if (uploads.length === 0) return []
+    set(uploadProgressAtom, {type: 'start', uploads, destination})
+    const uploaded = await Promise.all(
+      uploads.map(async ({id, file, type, edit, replaceId, compress}) => {
+        try {
+          const entry = await graph.upload({
+            file,
+            ...(type ? {type} : {}),
+            createPreview,
+            transformImage,
+            ...(compress !== false ? {compressPdf} : {}),
+            edit,
+            ...(replaceId ? {replaceId} : {}),
+            user: get(userAtom),
+            parentId: request.parentId,
+            workspace: request.workspace,
+            root: request.root,
+            onProgress: progress =>
+              set(uploadProgressAtom, {
+                type: 'progress',
+                id,
+                progress
+              })
+          })
+          set(uploadProgressAtom, {type: 'finish', ids: [id]})
+          return entry?._id
+        } catch (error) {
+          set(uploadProgressAtom, {
+            type: 'fail',
+            uploads: [
+              {
+                id,
+                file,
+                error: error instanceof Error ? error.message : String(error)
+              }
+            ],
+            destination
+          })
+        }
+      })
+    )
+    return uploaded.filter(id => id !== undefined)
+  }
+)
+
+/** A media file an upload matches */
+export interface MediaMatch {
+  id: string
+  title: string
+  workspace: string
+  root: string
+  parentId: string | null
+  url: string
+  extension: string
+  preview?: string
+  averageColor?: string
+}
+
+/**
+ * `upload` adds the file, `existing` uses the media file that has the same
+ * contents instead and `replace` swaps the file of the media file with the
+ * same name
+ */
+export type PendingUploadAction = 'upload' | 'existing' | 'replace'
+
+/** A file type an upload can become */
+export interface UploadType {
+  name: string
+  label: string
+}
+
+export interface PendingUpload {
+  id: string
+  file: File
+  /**
+   * The file types of the location that accept the file, in order. Empty
+   * when none does, the file is not uploaded then.
+   */
+  types: Array<UploadType>
+  /** The file type picked from `types`, the first by default */
+  type?: string
+  /** An object url of images the browser can show */
+  previewUrl?: string
+  /**
+   * Dimensions of a jpeg, png or webp image, as the browser shows it. These
+   * images can be rotated and cropped.
+   */
+  imageSize?: ImageSize
+  /** A media file in the workspace with the same contents */
+  duplicate?: MediaMatch
+  /** A media file with the same name where the file is uploaded to */
+  conflict?: MediaMatch
+  action: PendingUploadAction
+  edit?: ImageEdit
+  /** Whether the images of a pdf are recompressed, undefined for other files */
+  compress?: boolean
+}
+
+export interface ImageSize {
+  width: number
+  height: number
+}
+
+export interface PendingUploads {
+  destination: UploadDestination
+  /** The media file whose file is replaced, uploads only one file */
+  replace?: MediaMatch
+  uploads: Array<PendingUpload>
+}
+
+export interface UploadsRequest {
+  files: Iterable<File> | ArrayLike<File>
+  destination: UploadDestination
+  /** Replace the file of this media entry */
+  replaceId?: string
+}
+
+interface PendingUploadsState extends PendingUploads {
+  resolve(ids: Array<string>): void
+}
+
+const pendingUploadsState = atom<PendingUploadsState | undefined>(undefined)
+
+/** The files waiting to be confirmed in the upload dialog */
+export const pendingUploadsAtom = atom((get): PendingUploads | undefined =>
+  get(pendingUploadsState)
+)
+
+const matchSelection = {
+  id: Entry.id,
+  title: Entry.title,
+  workspace: Entry.workspace,
+  root: Entry.root,
+  parentId: Entry.parentId,
+  parents: Entry.parents,
+  url: Entry.url,
+  path: Entry.path,
+  type: Entry.type,
+  extension: FileData.extension,
+  preview: FileData.preview,
+  averageColor: FileData.averageColor,
+  hash: FileData.hash,
+  sourceHash: FileData.sourceHash
+}
+
+/**
+ * Opens the upload dialog for files, once it knows which files exist
+ * already. Resolves with the ids of the media entries that were uploaded or
+ * picked instead, empty when the dialog is cancelled.
+ */
+export const requestUploadsAtom = atom(
+  null,
+  async (get, set, request: UploadsRequest): Promise<Array<string>> => {
+    const files = Array.from(request.files)
+    if (files.length === 0) return []
+    const {destination, replaceId} = request
+    const graph = get(graphAtom)
+    const policy = get(policyAtom)
+    const config = get(configAtom)
+    const fileTypes = Config.fileTypes(config)
+    policy.assert(Permission.Upload, {
+      workspace: destination.workspace,
+      root: destination.root,
+      id: destination.parentId,
+      parents: destination.parents
+    })
+    const scanned = await Promise.all(
+      files.map(async file => {
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        const editable = isTransformableImage(file.name, bytes)
+        return {
+          hash: await createFileHash(bytes),
+          imageSize: editable ? await imageSize(file) : undefined
+        }
+      })
+    )
+    const hashes = scanned.map(file => file.hash)
+    const slugs = files.map(file =>
+      slugify(basename(file.name, extname(file.name)))
+    )
+    const [duplicates, siblings, replaced, parentType] = await Promise.all([
+      graph.find({
+        type: fileTypes,
+        workspace: destination.workspace,
+        filter: {or: [{hash: {in: hashes}}, {sourceHash: {in: hashes}}]},
+        select: matchSelection,
+        status: 'preferPublished'
+      }),
+      replaceId
+        ? []
+        : graph.find({
+            type: fileTypes,
+            workspace: destination.workspace,
+            root: destination.root,
+            parentId: destination.parentId ?? null,
+            filter: {_path: {in: slugs}},
+            select: matchSelection,
+            status: 'preferPublished'
+          }),
+      replaceId
+        ? graph.first({
+            type: fileTypes,
+            id: replaceId,
+            select: matchSelection,
+            status: 'preferPublished'
+          })
+        : null,
+      destination.parentId
+        ? graph.first({
+            id: destination.parentId,
+            select: Entry.type,
+            status: 'preferDraft'
+          })
+        : undefined
+    ])
+    const location = {
+      workspace: destination.workspace,
+      root: destination.root,
+      parentType: parentType ?? undefined
+    }
+    const uploadTypes = (file: File): Array<UploadType> =>
+      Config.acceptingTypes(config, location, file.name, file.type).map(
+        name => ({name, label: String(Type.label(config.schema[name]))})
+      )
+    const uploads = files.map((file, index): PendingUpload => {
+      const {hash, imageSize} = scanned[index]
+      const duplicate = duplicates.find(
+        match =>
+          match.id !== replaceId &&
+          (match.hash === hash || match.sourceHash === hash)
+      )
+      // Replacing a file with the same name needs permission to update it
+      const conflict = siblings.find(
+        match =>
+          match.path === slugs[index] &&
+          policy.canUpdate({
+            workspace: match.workspace,
+            root: match.root,
+            id: match.id,
+            parents: match.parents,
+            type: match.type
+          })
+      )
+      const types = uploadTypes(file)
+      return {
+        id: createId(),
+        file,
+        types,
+        ...(types.length > 0 ? {type: types[0].name} : {}),
+        ...(isImage(file.name) ? {previewUrl: URL.createObjectURL(file)} : {}),
+        ...(isPdf(file.name) ? {compress: true} : {}),
+        ...(imageSize ? {imageSize} : {}),
+        ...(duplicate ? {duplicate: mediaMatch(duplicate)} : {}),
+        ...(conflict ? {conflict: mediaMatch(conflict)} : {}),
+        action: replaceId ? 'replace' : duplicate ? 'existing' : 'upload'
+      }
+    })
+    const previous = get(pendingUploadsState)
+    if (!previous)
+      return new Promise(resolve => {
+        set(pendingUploadsState, {
+          destination,
+          ...(replaced ? {replace: mediaMatch(replaced)} : {}),
+          uploads,
+          resolve
+        })
+      })
+    // Files added while the dialog is open join the listed files, a replace
+    // or another folder can not share the dialog
+    const joins =
+      !replaceId &&
+      !previous.replace &&
+      previous.destination.workspace === destination.workspace &&
+      previous.destination.root === destination.root &&
+      previous.destination.parentId === destination.parentId
+    if (!joins) {
+      releasePreviews(uploads)
+      return []
+    }
+    return new Promise(resolve => {
+      set(pendingUploadsState, {
+        ...previous,
+        uploads: [...previous.uploads, ...uploads],
+        resolve(ids) {
+          previous.resolve(ids)
+          resolve(ids)
+        }
+      })
+    })
+  }
+)
+
+export const updatePendingUploadAtom = atom(
+  null,
+  (
+    get,
+    set,
+    id: string,
+    update: Partial<
+      Pick<PendingUpload, 'action' | 'edit' | 'compress' | 'type'>
+    >
+  ) => {
+    const pending = get(pendingUploadsState)
+    if (!pending) return
+    set(pendingUploadsState, {
+      ...pending,
+      uploads: pending.uploads.map(upload =>
+        upload.id === id ? {...upload, ...update} : upload
+      )
+    })
+  }
+)
+
+export const removePendingUploadAtom = atom(null, (get, set, id: string) => {
+  const pending = get(pendingUploadsState)
+  if (!pending) return
+  releasePreviews(pending.uploads.filter(upload => upload.id === id))
+  const uploads = pending.uploads.filter(upload => upload.id !== id)
+  if (uploads.length > 0) {
+    set(pendingUploadsState, {...pending, uploads})
+    return
+  }
+  set(pendingUploadsState, undefined)
+  pending.resolve([])
+})
+
+export const cancelPendingUploadsAtom = atom(null, (get, set) => {
+  const pending = get(pendingUploadsState)
+  if (!pending) return
+  set(pendingUploadsState, undefined)
+  releasePreviews(pending.uploads)
+  pending.resolve([])
+})
+
+/** Closes the upload dialog and uploads the files as decided in it */
+export const confirmPendingUploadsAtom = atom(null, async (get, set) => {
+  const pending = get(pendingUploadsState)
+  if (!pending) return
+  set(pendingUploadsState, undefined)
+  releasePreviews(pending.uploads)
+  const {destination, replace} = pending
+  const existing = pending.uploads.flatMap(upload =>
+    upload.action === 'existing' && upload.duplicate
+      ? [upload.duplicate.id]
+      : []
+  )
+  const uploaded = await set(uploadFilesAtom, {
+    ...destination,
+    uploads: pending.uploads.flatMap((upload): Array<UploadItem> => {
+      const replaceId =
+        upload.action === 'replace'
+          ? (replace?.id ?? upload.conflict?.id)
+          : undefined
+      if (upload.action === 'existing' && upload.duplicate) return []
+      // A replaced file keeps its type, other files need one that takes them
+      if (!replaceId && !upload.type) return []
+      return [
+        {
+          file: upload.file,
+          ...(upload.type && !replaceId ? {type: upload.type} : {}),
+          ...(upload.edit ? {edit: upload.edit} : {}),
+          ...(upload.compress === false ? {compress: false} : {}),
+          ...(replaceId ? {replaceId} : {})
+        }
+      ]
+    })
+  })
+  pending.resolve([...existing, ...uploaded])
+})
+
+/** The dimensions of an image, undefined if the browser can not decode it */
+async function imageSize(file: File): Promise<ImageSize | undefined> {
+  try {
+    const bitmap = await createImageBitmap(file)
+    const {width, height} = bitmap
+    bitmap.close()
+    return {width, height}
+  } catch {
+    return undefined
+  }
+}
+
+function releasePreviews(uploads: Array<PendingUpload>) {
+  for (const upload of uploads)
+    if (upload.previewUrl) URL.revokeObjectURL(upload.previewUrl)
+}
+
+function mediaMatch(row: MatchRow): MediaMatch {
+  return {
+    id: row.id,
+    title: row.title,
+    workspace: row.workspace,
+    root: row.root,
+    parentId: row.parentId,
+    url: row.url,
+    extension: row.extension,
+    ...(row.preview ? {preview: row.preview} : {}),
+    ...(row.averageColor ? {averageColor: row.averageColor} : {})
+  }
+}
+
+interface MatchRow {
+  id: string
+  title: string
+  workspace: string
+  root: string
+  parentId: string | null
+  url: string
+  extension: string
+  preview?: string | null
+  averageColor?: string | null
+}

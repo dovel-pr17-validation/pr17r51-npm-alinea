@@ -1,0 +1,78 @@
+import {crypto} from '@alinea/iso'
+
+/**
+ * Computes the SHA-1 hash bytes of the input data.
+ */
+export async function sha1Bytes(data: Uint8Array): Promise<Uint8Array> {
+  const hashBuffer = await crypto.subtle.digest('SHA-1', data as BufferSource)
+  return new Uint8Array(hashBuffer)
+}
+
+/**
+ * Computes the SHA-1 hash of the input data.
+ */
+export async function sha1Hash(data: Uint8Array): Promise<string> {
+  return bytesToHex(await sha1Bytes(data))
+}
+
+/**
+ * Concatenates multiple Uint8Arrays into a single Uint8Array.
+ */
+export function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
+  const totalLength = arrays.reduce((sum, arr) => sum + arr.length, 0)
+  const result = new Uint8Array(totalLength)
+  let offset = 0
+  for (const arr of arrays) {
+    result.set(arr, offset)
+    offset += arr.length
+  }
+  return result
+}
+
+/**
+ * Converts a hexadecimal string to a Uint8Array.
+ */
+export function hexToBytes(hex: string): Uint8Array {
+  if (hex.length % 2 !== 0) throw new Error('Invalid hex string')
+  const bytes = new Uint8Array(hex.length / 2)
+  for (let i = 0; i < bytes.length; i++)
+    bytes[i] = (nibble(hex, i * 2) << 4) | nibble(hex, i * 2 + 1)
+  return bytes
+}
+
+/** The value of a hexadecimal digit: letters have bit 0x40 set. */
+function nibble(hex: string, index: number): number {
+  const code = hex.charCodeAt(index)
+  return (code & 0xf) + (code >> 6) * 9
+}
+
+const hexes = Array.from({length: 256}, (_, i) =>
+  i.toString(16).padStart(2, '0')
+)
+
+/**
+ * Converts a Uint8Array to a hexadecimal string.
+ */
+export function bytesToHex(bytes: Uint8Array): string {
+  let hex = ''
+  for (let i = 0; i < bytes.length; i++) hex += hexes[bytes[i]]
+  return hex
+}
+
+/**
+ * Compares two strings for sorting.
+ * See: https://stackoverflow.com/a/40355107/2168416
+ */
+export function compareStrings(a: string, b: string) {
+  return -(a < b) || +(a > b)
+}
+
+export function splitPath(
+  path: string
+): [name: string, rest: string | undefined] {
+  const firstSlash = path.indexOf('/')
+  if (firstSlash === -1) return [path, undefined]
+  const name = path.slice(0, firstSlash)
+  const rest = path.slice(firstSlash + 1)
+  return [name, rest]
+}

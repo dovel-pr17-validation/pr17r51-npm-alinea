@@ -1,0 +1,35 @@
+.EntryHeader {
+  min-height: var(--alinea-header-height, 48px);
+}
+
+@media (max-width: 768px) {
+  .EntryHeader {
+    gap: 4px;
+    padding: 0 8px;
+  }
+
+  .EntryHeader-actions {
+    gap: 4px;
+  }
+
+  .EntryHeader-status,
+  .EntryHeader-type {
+    display: none;
+  }
+
+  .EntryHeader.is-dirty {
+    flex-wrap: wrap;
+    padding-block: 8px;
+    overflow: visible;
+  }
+
+  .EntryHeader.is-dirty .EntryHeader-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    width: 100%;
+  }
+
+  .EntryHeader.is-dirty .EntryHeader-sidebarToggle {
+    display: none;
+  }
+}

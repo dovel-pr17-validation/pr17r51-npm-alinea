@@ -1,0 +1,62 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+
+  &-filename {
+    font-family: var(--web-mono-font);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--web-foreground-muted);
+  }
+
+  &-code {
+    flex-grow: 1;
+    min-width: 0;
+    overflow: auto;
+    border-radius: 10px;
+    background: var(--web-code-background);
+    color: var(--web-code-foreground);
+    font-family: var(--web-mono-font);
+    font-size: 13.5px;
+    line-height: 1.75;
+
+    :global(.shiki) {
+      margin: 0;
+      padding: 18px 20px;
+      background: transparent !important;
+      font: inherit;
+      white-space: pre;
+    }
+
+    :global(.shiki code) {
+      font: inherit;
+    }
+  }
+
+  &.is-large {
+    gap: 10px;
+  }
+
+  &.is-large &-code {
+    border-radius: 12px;
+    font-size: 14px;
+    line-height: 1.8;
+
+    :global(.shiki) {
+      padding: 32px;
+    }
+  }
+
+  // Fills a fixed height tile, like the other step visuals
+  &.is-visual &-code {
+    border-radius: 12px;
+    font-size: 13px;
+    line-height: 1.75;
+
+    :global(.shiki) {
+      padding: 24px;
+    }
+  }
+}

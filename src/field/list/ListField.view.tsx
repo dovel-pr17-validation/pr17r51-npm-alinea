@@ -1,0 +1,1011 @@
+import {
+  Button,
+  Command,
+  CommandEmpty,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  SortableListItem,
+  type DragMoveEvent,
+  SortableList,
+  SortableListItemTitle,
+  SortableListAdd,
+  ListError,
+  ListLabel,
+  SortableListItemActions,
+  SortableListItemContent,
+  SortableListItemToggle,
+  SortableListItemHeader,
+  SortableListItemDescription,
+  SortableListItemInsert,
+  SortableListItemTrigger,
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+  PopoverTrigger,
+  SheetBody,
+  SheetClose,
+  SheetContent,
+  SheetFooter,
+  SheetHeader,
+  SheetSection,
+  SheetTitle,
+  TextField,
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger
+} from '#/components.js'
+import {ListField as CoreListField} from '#/core/field/ListField.js'
+import {createId} from '#/core/Id.js'
+import {getType} from '#/core/Internal.js'
+import {ListRow} from '#/core/ListRow.js'
+import {Schema} from '#/core/Schema.js'
+import {Type} from '#/core/Type.js'
+import {slugify} from '#/core/util/Slugs.js'
+import {Badge} from '#/components.js'
+import {
+  BlockSheet,
+  type BlockSheetState,
+  useBlockSheet
+} from '#/dashboard/app/BlockSheet.js'
+import {BlockTabs} from '#/dashboard/app/BlockTabs.js'
+import {NodeEditor} from '#/dashboard/app/NodeEditor.js'
+import {ReactiveNode} from '#/dashboard/atoms/ReactiveNode.js'
+import {
+  useEntry,
+  useFieldError,
+  useFieldNode,
+  useFieldOptions,
+  useNodes
+} from '#/dashboard/hooks.js'
+import {
+  IcBaselineContentCopy,
+  IcBaselineContentPasteGo,
+  IcRoundAdd,
+  IcRoundArrowDownward,
+  IcRoundArrowUpward,
+  IcRoundClose,
+  IcRoundDelete,
+  IcRoundFirstPage,
+  IcRoundLastPage,
+  IcRoundLink,
+  IcRoundMoreHoriz
+} from '#/dashboard/icons.js'
+import {ListOptions} from '#/field/list.js'
+import {SlugField} from '#/field/path/SlugField.js'
+import styler from '@alinea/styler'
+import {atom, useAtomValueRaw, useSetAtom} from 'jotai'
+import {atomWithStorage} from 'jotai/utils'
+import type {ComponentType, ReactNode} from 'react'
+import {memo, useCallback, useMemo, useRef, useState} from 'react'
+import css from './ListField.module.css'
+
+const styles = styler(css)
+
+interface ListValue {
+  _id: string
+  _type: string
+  [key: string]: unknown
+}
+
+const copyAtom = atomWithStorage<ListValue | undefined>(
+  '@alinea/copypaste',
+  undefined
+)
+// The type of the block copied in this tab, which other lists may hold under
+// another key. A block copied in another tab replaces the row only.
+const copyTypeAtom = atom<{id: string; type: Type} | undefined>(undefined)
+
+/** The copied block as a row of a list, under its key for the same type */
+function pastedRow(
+  row: ListValue | undefined,
+  copied: {id: string; type: Type} | undefined,
+  schema: Schema
+): ListValue | undefined {
+  if (!row) return
+  const type = copied?.id === row._id ? copied.type : undefined
+  const key = Object.keys(schema).find(key => schema[key] === type)
+  if (key) return {...row, _type: key}
+  return schema[row._type] ? row : undefined
+}
+
+export interface ListFieldTypeItem {
+  id: string
+  label: string
+  type: Schema[string]
+}
+
+interface ListFieldPickerOption {
+  id: string
+  label: string
+  icon: ComponentType
+  typeItem?: ListFieldTypeItem
+  pasted?: ListValue
+}
+
+export interface ListFieldViewProps {
+  field: CoreListField<ListRow, ListValue, ListOptions<Schema>>
+}
+
+export function ListFieldView({field}: ListFieldViewProps) {
+  const options = useFieldOptions(field) as ListOptions<Schema>
+  const error = useFieldError(field)
+  const list = useFieldNode(field) as ReactiveNode<Array<ListValue>>
+  const nodes = useNodes(list) as Array<ReactiveNode<ListValue>>
+  const pushRow = useSetAtom(list.push)
+  const insertRow = useSetAtom(list.insert)
+  const copied = useAtomValueRaw(copyAtom)
+  const copiedType = useAtomValueRaw(copyTypeAtom)
+  const pasted = useMemo(
+    () => pastedRow(copied, copiedType, options.schema),
+    [copied, copiedType, options.schema]
+  )
+  const schemaEntries = useMemo(
+    () => Object.entries(options.schema),
+    [options.schema]
+  )
+  const typeItems = useMemo(
+    () =>
+      schemaEntries.map(([id, type]) => ({
+        id,
+        label: Type.label(type),
+        type
+      })),
+    [schemaEntries]
+  )
+  const readOnly = Boolean(options.readOnly)
+  // A fold without a label next to it is a stray chevron, so lists without
+  // a visible label are always unfolded
+  const labelled = Boolean(options.label) && !options.inline
+  const hasRows = nodes.length > 0
+  const canCreate = options.max === undefined || nodes.length < options.max
+  const rowIdsAtom = useMemo(
+    () =>
+      atom(get => {
+        const nodes = get(list.nodes) as Array<ReactiveNode<ListValue>>
+        return nodes.map(node => get(node.field('_id')) as string)
+      }),
+    [list]
+  )
+  const rowIds = useAtomValueRaw(rowIdsAtom)
+  const [foldedIds, setFoldedIds] = useState<Set<string>>(
+    () => new Set(options.collapsed && labelled ? rowIds : [])
+  )
+  const moveRowAtom = useMemo(
+    () =>
+      atom(null, (get, set, {keys, target}: DragMoveEvent) => {
+        const nodes = get(list.nodes) as Array<ReactiveNode<ListValue>>
+        const ids = nodes.map(node => get(node.field('_id')))
+        const [rowId] = keys
+        const fromIndex = ids.indexOf(rowId)
+        const targetRow = ids.indexOf(target.key)
+        if (fromIndex === -1 || targetRow === -1) return
+        const targetIndex = insertIndex(
+          targetRow,
+          target.position === 'before' ? 'before' : 'after'
+        )
+        const toIndex = reorderIndex(fromIndex, targetIndex)
+        if (toIndex === fromIndex) return
+        set(list.move, fromIndex, toIndex)
+      }),
+    [list]
+  )
+  const moveRow = useSetAtom(moveRowAtom)
+  const copyRowAtom = useMemo(
+    () =>
+      atom(null, (get, set, rowId: string) => {
+        const nodes = get(list.nodes) as Array<ReactiveNode<ListValue>>
+        const node = nodes.find(node => get(node.field('_id')) === rowId)
+        if (!node) return
+        const row = get(node.value)
+        set(copyAtom, row)
+        set(copyTypeAtom, {id: row._id, type: options.schema[row._type]})
+      }),
+    [list, options.schema]
+  )
+  const copyRow = useSetAtom(copyRowAtom)
+  const allExpanded = nodes.length > 0 && rowIds.every(id => !foldedIds.has(id))
+
+  function toggleAll() {
+    setFoldedIds(allExpanded ? new Set(rowIds) : new Set())
+  }
+
+  // Stable callbacks keep memoized rows from rendering on unrelated changes
+  const toggleRow = useCallback((rowId: string) => {
+    setFoldedIds(current => {
+      const next = new Set(current)
+      if (next.has(rowId)) next.delete(rowId)
+      else next.add(rowId)
+      return next
+    })
+  }, [])
+
+  function addRow(typeName: string, type: Schema[string]) {
+    pushRow(createRow(typeName, type))
+  }
+
+  const content = (hasRows || !readOnly) && (
+    <SortableList
+      aria-label={options.label || 'List items'}
+      onReorder={readOnly ? undefined : moveRow}
+    >
+      {nodes.map((row, index) => (
+        <ListFieldRow
+          key={rowIds[index] || index}
+          onInsertRow={insertRow}
+          canCreate={canCreate}
+          expanded={!foldedIds.has(rowIds[index])}
+          index={index}
+          list={list}
+          readOnly={readOnly}
+          onCopyRow={copyRow}
+          onToggleRow={toggleRow}
+          row={row}
+          rows={nodes.length}
+          schema={options.schema}
+          pasted={pasted}
+          typeItems={typeItems}
+        />
+      ))}
+      {!readOnly && canCreate && (
+        <SortableListAdd>
+          <ListFieldCreateActions
+            items={typeItems}
+            pasted={pasted && options.schema[pasted._type] ? pasted : undefined}
+            onPaste={row => pushRow(cloneRow(row))}
+            onSelect={item => addRow(item.id, item.type)}
+          />
+        </SortableListAdd>
+      )}
+    </SortableList>
+  )
+
+  return (
+    <>
+      <ListLabel
+        required={options.required}
+        readOnly={readOnly}
+        aria-label={
+          hasRows
+            ? allExpanded
+              ? 'Collapse all items'
+              : 'Expand all items'
+            : 'No list items to fold'
+        }
+        expanded={allExpanded}
+        hasRows={hasRows}
+        disabled={!hasRows}
+        onClick={toggleAll}
+        description={options.help}
+        shared={options.shared}
+        showFold={labelled}
+        inline={!labelled}
+      >
+        {options.label}
+      </ListLabel>
+      {content}
+      {error && <ListError>{error}</ListError>}
+    </>
+  )
+}
+
+export function insertIndex(
+  rowIndex: number,
+  position: 'before' | 'after'
+): number {
+  return position === 'before' ? rowIndex : rowIndex + 1
+}
+
+export function reorderIndex(fromIndex: number, targetIndex: number): number {
+  return fromIndex < targetIndex ? targetIndex - 1 : targetIndex
+}
+
+function createRow(typeName: string, type: Schema[string]): ListValue {
+  const initialValue = Type.initialValue(type) as Record<string, unknown>
+  return {
+    _id: createId(),
+    _index: '',
+    _type: typeName,
+    ...initialValue
+  }
+}
+
+function cloneRow(row: ListValue): ListValue {
+  return {
+    ...row,
+    _id: createId(),
+    _index: ''
+  }
+}
+
+function pasteBlockLabel(
+  row: ListValue,
+  items: Array<ListFieldTypeItem>
+): string {
+  const item = items.find(item => item.id === row._type)
+  return item ? `Paste ${item.label}` : 'Paste block'
+}
+
+interface ListFieldCreateActionsProps {
+  items: Array<ListFieldTypeItem>
+  pasted?: ListValue
+  onPaste: (row: ListValue) => void
+  onSelect: (item: ListFieldTypeItem) => void
+}
+
+function ListFieldCreateActions({
+  items,
+  pasted,
+  onPaste,
+  onSelect
+}: ListFieldCreateActionsProps) {
+  const visibleItems = items.slice(0, 3)
+  const hasMenu = items.length > visibleItems.length
+  return (
+    <div className={styles.ListFieldCreateActions()}>
+      {pasted && (
+        <Button
+          className={styles.ListFieldCreateActions.button()}
+          onClick={() => onPaste(pasted)}
+          size="sm"
+          icon={IcBaselineContentPasteGo}
+          variant="ghost"
+        >
+          {pasteBlockLabel(pasted, items)}
+        </Button>
+      )}
+      {visibleItems.map(item => (
+        <Button
+          className={styles.ListFieldCreateActions.button()}
+          key={item.id}
+          onClick={() => onSelect(item)}
+          size="sm"
+          icon={getType(item.type).icon || IcRoundAdd}
+          variant="ghost"
+        >
+          {item.label}
+        </Button>
+      ))}
+      {hasMenu && (
+        <ListFieldTypePicker
+          items={items}
+          label="More block types"
+          pasted={pasted}
+          pasteLabel={pasted ? pasteBlockLabel(pasted, items) : undefined}
+          triggerIcon={IcRoundMoreHoriz}
+          onPaste={onPaste}
+          onSelect={onSelect}
+        />
+      )}
+    </div>
+  )
+}
+
+interface ListFieldRowProps {
+  canCreate: boolean
+  index: number
+  list: ReactiveNode<Array<ListValue>>
+  readOnly: boolean
+  row: ReactiveNode<ListValue>
+  rows: number
+  schema: Schema
+  typeItems: Array<ListFieldTypeItem>
+  pasted?: ListValue
+  expanded: boolean
+  onToggleRow: (rowId: string) => void
+  onCopyRow: (rowId: string) => void
+  onInsertRow: (index: number, row: ListValue) => void
+}
+
+const ListFieldRow = memo(function ListFieldRow({
+  canCreate,
+  index,
+  list,
+  readOnly,
+  row,
+  rows,
+  schema,
+  typeItems,
+  pasted,
+  expanded,
+  onToggleRow,
+  onCopyRow,
+  onInsertRow
+}: ListFieldRowProps) {
+  const itemId = useAtomValueRaw(row.field('_id')) as string
+  const typeName = useAtomValueRaw(row.field('_type')) as string
+  const customLabelValue = useAtomValueRaw(row.field('_label')) as
+    | string
+    | undefined
+  const anchorValue = useAtomValueRaw(row.field('_anchor')) as
+    | string
+    | undefined
+  const customLabel = customLabelValue ?? ''
+  const setCustomLabel = useSetAtom(row.field('_label'))
+  const setAnchor = useSetAtom(row.field('_anchor'))
+  const moveListRow = useSetAtom(list.move)
+  const removeRow = useSetAtom(list.remove)
+  const sheet = useBlockSheet(itemId)
+  const type = schema[typeName]
+  if (!type) return null
+
+  const label = Type.label(type)
+  const typeIcon = getType(type).icon
+
+  function deleteRow() {
+    removeRow(index)
+  }
+
+  function updateCustomLabel(nextValue: string) {
+    setCustomLabel(nextValue || undefined)
+    const currentLabelSlug = slugify(customLabel)
+    const shouldSyncAnchor =
+      anchorValue === undefined || anchorValue === currentLabelSlug
+    if (shouldSyncAnchor) setAnchor(slugify(nextValue) || undefined)
+  }
+
+  function updateAnchor(nextValue: string) {
+    setAnchor(slugify(nextValue.replace(/^#+/, '')) || undefined)
+  }
+
+  return (
+    <>
+      <SortableListItem
+        aria-label={`${label} item ${index + 1}`}
+        current={sheet.open}
+        id={itemId}
+      >
+        {canCreate && !readOnly && (
+          <ListFieldInsertGap
+            items={typeItems}
+            label={`Insert before ${label} item ${index + 1}`}
+            pasted={pasted && schema[pasted._type] ? pasted : undefined}
+            onInsert={value => onInsertRow(insertIndex(index, 'before'), value)}
+          />
+        )}
+        <ListFieldRowHeader
+          expanded={expanded}
+          label={label}
+          customLabel={customLabel}
+          anchor={anchorValue}
+          readOnly={readOnly}
+          sheet={sheet}
+          typeIcon={typeIcon}
+          onDelete={deleteRow}
+          onToggle={() => onToggleRow(itemId)}
+        />
+        {expanded && (
+          <SortableListItemContent>
+            <NodeEditor node={row as ReactiveNode<object>} type={type} />
+          </SortableListItemContent>
+        )}
+      </SortableListItem>
+      {/* Outside the item so events in the sheet don't reach its handlers */}
+      <BlockSheet id={itemId}>
+        <ListFieldRowSheet
+          anchor={anchorValue}
+          tabs={
+            <BlockTabs
+              node={row as ReactiveNode<object>}
+              type={type}
+              readOnly={readOnly}
+            />
+          }
+          canInsert={canCreate}
+          customLabel={customLabel}
+          isFirstRow={index === 0}
+          isLastRow={index === rows - 1}
+          items={typeItems}
+          label={label}
+          pasted={pasted && schema[pasted._type] ? pasted : undefined}
+          readOnly={readOnly}
+          typeIcon={typeIcon}
+          onAnchorChange={updateAnchor}
+          onClose={() => sheet.setOpen(false)}
+          onCopy={() => onCopyRow(itemId)}
+          onCustomLabelChange={updateCustomLabel}
+          onDelete={deleteRow}
+          onInsertAfter={value =>
+            onInsertRow(insertIndex(index, 'after'), value)
+          }
+          onInsertBefore={value =>
+            onInsertRow(insertIndex(index, 'before'), value)
+          }
+          onMoveDown={() => moveListRow(index, index + 1)}
+          onMoveUp={() => moveListRow(index, index - 1)}
+        />
+      </BlockSheet>
+    </>
+  )
+})
+
+interface ListFieldInsertGapProps {
+  items: Array<ListFieldTypeItem>
+  label: string
+  pasted?: ListValue
+  onInsert: (row: ListValue) => void
+}
+
+/** Inserts a row on the border above a row, picking its type if needed */
+function ListFieldInsertGap({
+  items,
+  label,
+  pasted,
+  onInsert
+}: ListFieldInsertGapProps) {
+  const ref = useRef<HTMLButtonElement>(null)
+  const [open, setOpen] = useState(false)
+  const direct = !pasted && items.length === 1 ? items[0] : undefined
+
+  function insert(row: ListValue) {
+    onInsert(row)
+    setOpen(false)
+  }
+
+  return (
+    <>
+      <SortableListItemInsert
+        ref={ref}
+        aria-label={label}
+        aria-haspopup={direct ? undefined : 'dialog'}
+        aria-expanded={direct ? undefined : open}
+        onClick={() => {
+          if (direct) onInsert(createRow(direct.id, direct.type))
+          else setOpen(true)
+        }}
+      />
+      {!direct && (
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverAnchor virtualRef={ref} />
+          <PopoverContent
+            aria-label={label}
+            align="start"
+            className={styles.ListFieldTypePicker.popover()}
+          >
+            <ListFieldTypeCommand
+              items={items}
+              label={label}
+              pasted={pasted}
+              pasteLabel={pasted ? pasteBlockLabel(pasted, items) : undefined}
+              onPaste={row => insert(cloneRow(row))}
+              onSelect={item => insert(createRow(item.id, item.type))}
+            />
+          </PopoverContent>
+        </Popover>
+      )}
+    </>
+  )
+}
+
+function rowAnchor(customLabel: string, anchor?: string): string {
+  return (anchor ?? slugify(customLabel.trim())).trim()
+}
+
+interface ListFieldRowHeaderProps {
+  expanded: boolean
+  label: string
+  customLabel: string
+  anchor?: string
+  readOnly: boolean
+  sheet: BlockSheetState
+  typeIcon?: ComponentType
+  onDelete: () => void
+  onToggle: () => void
+}
+
+function ListFieldRowHeader({
+  expanded,
+  label,
+  customLabel,
+  anchor,
+  readOnly,
+  sheet,
+  typeIcon,
+  onDelete,
+  onToggle
+}: ListFieldRowHeaderProps) {
+  const displayLabel = customLabel.trim()
+  const displayAnchor = rowAnchor(customLabel, anchor)
+  const showAnchor = Boolean(displayAnchor && !displayLabel)
+  const title = (
+    <>
+      <Badge icon={typeIcon} size="sm" color="primary">
+        {label}
+      </Badge>
+      {displayLabel && (
+        <SortableListItemDescription>
+          {displayLabel}
+        </SortableListItemDescription>
+      )}
+      {showAnchor && <Badge size="sm">#{displayAnchor}</Badge>}
+    </>
+  )
+  return (
+    <SortableListItemHeader>
+      <SortableListItemTitle>
+        <SortableListItemToggle
+          aria-label={expanded ? `Collapse ${label}` : `Expand ${label}`}
+          expanded={expanded}
+          onClick={onToggle}
+        />
+        {sheet.available ? (
+          <SortableListItemTrigger
+            {...sheet.triggerProps}
+            aria-label={`${label} settings`}
+            aria-expanded={sheet.open}
+            onClick={() => {
+              // Opening the settings shows the row they belong to
+              if (!sheet.open && !expanded) onToggle()
+              sheet.toggle()
+            }}
+          >
+            {title}
+          </SortableListItemTrigger>
+        ) : (
+          title
+        )}
+      </SortableListItemTitle>
+      <SortableListItemActions>
+        <Button
+          variant="ghost"
+          aria-label={`Remove ${label}`}
+          icon={IcRoundClose}
+          disabled={readOnly}
+          onClick={onDelete}
+          size="icon-sm"
+        />
+      </SortableListItemActions>
+    </SortableListItemHeader>
+  )
+}
+
+type InsertPosition = 'before' | 'after'
+
+interface ListFieldRowSheetProps {
+  anchor?: string
+  /** The tabs of the row's type, rendered below the label and anchor */
+  tabs?: ReactNode
+  canInsert: boolean
+  customLabel: string
+  isFirstRow: boolean
+  isLastRow: boolean
+  items: Array<ListFieldTypeItem>
+  label: string
+  pasted?: ListValue
+  readOnly: boolean
+  typeIcon?: ComponentType
+  onAnchorChange: (value: string) => void
+  onClose: () => void
+  onCopy: () => void
+  onCustomLabelChange: (value: string) => void
+  onDelete: () => void
+  onInsertAfter: (value: ListValue) => void
+  onInsertBefore: (value: ListValue) => void
+  onMoveDown: () => void
+  onMoveUp: () => void
+}
+
+function ListFieldRowSheet({
+  anchor,
+  tabs,
+  canInsert,
+  customLabel,
+  isFirstRow,
+  isLastRow,
+  items,
+  label,
+  pasted,
+  readOnly,
+  typeIcon,
+  onAnchorChange,
+  onClose,
+  onCopy,
+  onCustomLabelChange,
+  onDelete,
+  onInsertAfter,
+  onInsertBefore,
+  onMoveDown,
+  onMoveUp
+}: ListFieldRowSheetProps) {
+  const [insertPosition, setInsertPosition] = useState<InsertPosition | null>(
+    null
+  )
+  const entryUrl = useEntry()?.url
+  const displayLabel = customLabel.trim()
+  const displayAnchor = rowAnchor(customLabel, anchor)
+  const title = displayLabel || (displayAnchor && `#${displayAnchor}`) || label
+  const link =
+    entryUrl && displayAnchor ? `${entryUrl}#${displayAnchor}` : undefined
+
+  function insert(position: InsertPosition, row: ListValue) {
+    if (position === 'after') onInsertAfter(row)
+    else onInsertBefore(row)
+    onClose()
+  }
+
+  function startInsert(position: InsertPosition) {
+    // A single block type needs no picker
+    const only = !pasted && items.length === 1 ? items[0] : undefined
+    if (only) insert(position, createRow(only.id, only.type))
+    else setInsertPosition(position)
+  }
+
+  function copy() {
+    onCopy()
+    onClose()
+  }
+
+  return (
+    <SheetContent onClose={onClose}>
+      <SheetHeader>
+        <Badge icon={typeIcon} size="sm" color="primary">
+          {label}
+        </Badge>
+        <SheetTitle>{title}</SheetTitle>
+        <SheetClose aria-label="Close block settings" />
+      </SheetHeader>
+      {insertPosition ? (
+        <SheetBody>
+          <ListFieldTypeCommand
+            items={items}
+            label={`Insert ${insertPosition}`}
+            pasted={pasted}
+            pasteLabel={pasted ? pasteBlockLabel(pasted, items) : undefined}
+            onPaste={row => insert(insertPosition, cloneRow(row))}
+            onSelect={item =>
+              insert(insertPosition, createRow(item.id, item.type))
+            }
+          />
+        </SheetBody>
+      ) : (
+        <>
+          <SheetBody>
+            <SheetSection>
+              <TextField
+                label="Label"
+                disabled={readOnly}
+                onValueChange={onCustomLabelChange}
+                value={customLabel}
+              />
+              <div className={styles.ListFieldRowSheet.anchor()}>
+                <div className={styles.ListFieldRowSheet.anchor.field()}>
+                  <SlugField
+                    fieldValue={anchor}
+                    label="Anchor"
+                    isDisabled={readOnly}
+                    onChange={onAnchorChange}
+                    source={customLabel}
+                  />
+                </div>
+                {link && (
+                  <Tooltip>
+                    <TooltipTrigger
+                      variant="ghost"
+                      size="icon"
+                      icon={IcRoundLink}
+                      aria-label="Copy link to block"
+                      onClick={() => navigator.clipboard.writeText(link)}
+                    />
+                    <TooltipContent>Copy link to block</TooltipContent>
+                  </Tooltip>
+                )}
+              </div>
+            </SheetSection>
+            {tabs}
+          </SheetBody>
+          <SheetFooter>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={IcRoundFirstPage}
+              disabled={readOnly || !canInsert}
+              onClick={() => startInsert('before')}
+            >
+              Insert before
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={IcRoundLastPage}
+              disabled={readOnly || !canInsert}
+              onClick={() => startInsert('after')}
+            >
+              Insert after
+            </Button>
+          </SheetFooter>
+          <SheetFooter>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={IcBaselineContentCopy}
+              onClick={copy}
+            >
+              Copy
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={IcRoundArrowUpward}
+              disabled={readOnly || isFirstRow}
+              onClick={onMoveUp}
+            >
+              Move up
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={IcRoundArrowDownward}
+              disabled={readOnly || isLastRow}
+              onClick={onMoveDown}
+            >
+              Move down
+            </Button>
+          </SheetFooter>
+          <SheetFooter>
+            <Button
+              variant="ghost"
+              size="sm"
+              color="destructive"
+              icon={IcRoundDelete}
+              disabled={readOnly}
+              onClick={onDelete}
+            >
+              Delete
+            </Button>
+          </SheetFooter>
+        </>
+      )}
+    </SheetContent>
+  )
+}
+
+interface ListFieldTypePickerProps {
+  className?: string
+  isDisabled?: boolean
+  items: Array<ListFieldTypeItem>
+  label: string
+  onOpenChange?: (isOpen: boolean) => void
+  pasted?: ListValue
+  pasteLabel?: string
+  triggerIcon?: ComponentType
+  onPaste?: (row: ListValue) => void
+  onSelect: (item: ListFieldTypeItem) => void
+}
+
+function ListFieldTypePicker({
+  className,
+  isDisabled,
+  items,
+  label,
+  onOpenChange,
+  pasted,
+  pasteLabel,
+  triggerIcon = IcRoundAdd,
+  onPaste,
+  onSelect
+}: ListFieldTypePickerProps) {
+  const [isOpen, setIsOpen] = useState(false)
+
+  function handleOpenChange(nextOpen: boolean) {
+    setIsOpen(nextOpen)
+    onOpenChange?.(nextOpen)
+  }
+
+  return (
+    <Popover open={isOpen} onOpenChange={handleOpenChange}>
+      <PopoverTrigger
+        aria-label={label}
+        className={styles.ListFieldTypePicker.trigger(
+          styler.merge({className})
+        )}
+        data-open={isOpen ? 'true' : undefined}
+        disabled={isDisabled}
+        size="icon"
+        icon={triggerIcon}
+      />
+      <PopoverContent
+        aria-label={label}
+        className={styles.ListFieldTypePicker.popover()}
+      >
+        <ListFieldTypeCommand
+          items={items}
+          label={label}
+          pasted={pasted}
+          pasteLabel={pasteLabel}
+          onPaste={
+            onPaste &&
+            (row => {
+              onPaste(row)
+              handleOpenChange(false)
+            })
+          }
+          onSelect={item => {
+            onSelect(item)
+            handleOpenChange(false)
+          }}
+        />
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+export interface ListFieldTypeCommandProps {
+  items: Array<ListFieldTypeItem>
+  label: string
+  pasted?: ListValue
+  pasteLabel?: string
+  onPaste?: (row: ListValue) => void
+  onSelect: (item: ListFieldTypeItem) => void
+}
+
+/** Searchable list of block types, also used to insert rich text blocks */
+export function ListFieldTypeCommand({
+  items,
+  label,
+  pasted,
+  pasteLabel,
+  onPaste,
+  onSelect
+}: ListFieldTypeCommandProps) {
+  const pickerItems = useListFieldPickerItems(
+    items,
+    pasted,
+    pasteLabel,
+    onPaste
+  )
+  return (
+    <Command>
+      <CommandInput
+        aria-label="Search types"
+        autoFocus
+        placeholder="Search types..."
+      />
+      <CommandList aria-label={label}>
+        <CommandEmpty>No matching types</CommandEmpty>
+        {pickerItems.map(item => (
+          <CommandItem
+            key={item.id}
+            icon={item.icon}
+            value={item.id}
+            onSelect={() => {
+              if (item.pasted) onPaste?.(item.pasted)
+              if (item.typeItem) onSelect(item.typeItem)
+            }}
+          >
+            {item.label}
+          </CommandItem>
+        ))}
+      </CommandList>
+    </Command>
+  )
+}
+
+function useListFieldPickerItems(
+  items: Array<ListFieldTypeItem>,
+  pasted?: ListValue,
+  pasteLabel?: string,
+  onPaste?: (row: ListValue) => void
+): Array<ListFieldPickerOption> {
+  return useMemo<Array<ListFieldPickerOption>>(() => {
+    const pasteItem =
+      pasted && onPaste
+        ? [
+            {
+              id: 'paste',
+              label: pasteLabel || 'Paste block',
+              icon: IcBaselineContentPasteGo,
+              pasted
+            }
+          ]
+        : []
+    return [
+      ...pasteItem,
+      ...items.map(item => ({
+        id: item.id,
+        label: item.label,
+        icon: getType(item.type).icon || IcRoundAdd,
+        typeItem: item
+      }))
+    ]
+  }, [items, onPaste, pasteLabel, pasted])
+}

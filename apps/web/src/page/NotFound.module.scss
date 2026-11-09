@@ -1,0 +1,45 @@
+@use '@/style' as *;
+
+.root {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+  width: 100%;
+  max-width: calc(var(--web-content-width) + 2 * var(--web-gutter));
+  margin-inline: auto;
+  padding: 96px var(--web-gutter) var(--web-section-gap);
+
+  @include sm {
+    padding-top: 48px;
+  }
+
+  &-title {
+    margin: 0;
+    font-family: var(--web-title-font);
+    font-weight: 500;
+    font-size: 44px;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+
+    @include sm {
+      font-size: 36px;
+    }
+  }
+
+  &-description {
+    margin: 0;
+    max-width: 560px;
+    font-size: 19px;
+    line-height: 1.55;
+    color: var(--web-foreground-faded);
+
+    @include sm {
+      font-size: 17px;
+    }
+  }
+
+  &-action {
+    margin-top: 16px;
+  }
+}

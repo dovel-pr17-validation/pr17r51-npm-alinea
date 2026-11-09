@@ -1,0 +1,91 @@
+.Command {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.CommandInput {
+  padding: 0 12px 0 14px;
+  border-bottom: 1px solid var(--alinea-border);
+}
+
+.CommandList {
+  max-height: 260px;
+  overflow: auto;
+  padding: 4px;
+  outline: none;
+}
+
+.CommandEmpty {
+  padding: 16px;
+  color: var(--alinea-fg-muted);
+  font-size: var(--alinea-font-size-base);
+  text-align: center;
+}
+
+.CommandGroup {
+  display: block;
+}
+
+.CommandGroup-heading {
+  padding: 4px 6px;
+  color: var(--alinea-fg-muted);
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.CommandItem {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0.4rem;
+  border-radius: var(--alinea-radius-sm);
+  color: var(--alinea-fg);
+  font-size: var(--alinea-font-size-base);
+  outline: none;
+  cursor: pointer;
+
+  &:hover,
+  &.is-highlighted {
+    background: var(--alinea-muted);
+  }
+
+  /* Like a menu, the item under the pointer is the one marked. The item
+     Enter picks keeps its ring while using the keyboard. */
+  .CommandList:hover &.is-highlighted:not(:hover) {
+    background: transparent;
+  }
+
+  /* The subtle background only marks the item under the pointer, keyboard
+     focus also gets a ring */
+  &.is-focusVisible {
+    outline: 2px solid var(--alinea-ring);
+    outline-offset: -2px;
+  }
+
+  &[aria-disabled='true'] {
+    pointer-events: none;
+    opacity: 0.5;
+  }
+}
+
+.CommandItem-icon {
+  flex-shrink: 0;
+  font-size: 16px;
+}
+
+.CommandItem-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.CommandSeparator {
+  height: 1px;
+  margin: 4px 8px;
+  border: none;
+  background: var(--alinea-border);
+}

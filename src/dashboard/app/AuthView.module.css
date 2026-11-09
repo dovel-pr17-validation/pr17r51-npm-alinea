@@ -1,0 +1,32 @@
+.AuthView {
+  display: flex;
+  min-height: 100%;
+  width: 100%;
+  background: var(--alinea-bg-muted);
+  color: var(--alinea-fg);
+}
+
+.AuthView-panel {
+  display: flex;
+  justify-content: center;
+  width: min(100%, 520px);
+  margin: auto;
+  padding: 24px;
+}
+
+.AuthView-loader {
+  display: grid;
+  place-items: center;
+  min-height: 160px;
+}
+
+.AuthView-mark {
+  border-color: transparent;
+  background: var(--alinea-primary);
+  color: var(--alinea-primary-fg);
+}
+
+.AuthView-link {
+  color: var(--alinea-primary);
+  font-weight: 600;
+}

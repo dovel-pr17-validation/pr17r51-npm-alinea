@@ -1,0 +1,17 @@
+.FilePreview {
+  width: calc(50% - 20px);
+  max-width: calc(50% - 20px);
+  min-height: 480px;
+  max-height: 480px;
+  margin: 16px 4px 16px 16px;
+}
+
+@media (max-width: 800px) {
+  .FilePreview {
+    width: calc(100% - 24px);
+    max-width: calc(100% - 24px);
+    min-height: 320px;
+    max-height: 320px;
+    margin: 12px;
+  }
+}

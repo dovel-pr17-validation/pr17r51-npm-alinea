@@ -1,0 +1,53 @@
+import {suite} from '@alinea/suite'
+import {Edit} from '#/index.js'
+import {LocalDB} from '#/database/LocalDB.js'
+import {config} from './example.js'
+
+const test = suite(import.meta)
+
+const {Page} = config.schema
+
+async function createDb() {
+  const db = new LocalDB(config)
+  await db.sync()
+  return db
+}
+
+test('filters', async () => {
+  const db = await createDb()
+  const entry = await db.create({
+    type: Page,
+    set: {
+      title: 'New entry',
+      entryLink: Edit.links(Page.entryLink).addEntry('xyz').value(),
+      list: Edit.list(Page.list)
+        .add('item', {
+          itemId: 'item-1'
+        })
+        .value()
+    }
+  })
+  const result = await db.find({
+    type: Page,
+    filter: {
+      list: {includes: {itemId: 'item-1'}}
+    }
+  })
+  test.is(result.length, 1)
+  const result2 = await db.find({
+    type: Page,
+    filter: {
+      entryLink: {
+        includes: {
+          _entry: 'xyz'
+        }
+      }
+    }
+  })
+  test.is(result2.length, 1)
+  const result3 = await db.find({
+    type: Page,
+    id: {in: ['a', 'b', 'c']}
+  })
+  test.is(result3.length, 0)
+})

@@ -1,0 +1,106 @@
+.TextField {
+  display: block;
+}
+
+.TextFieldGroup {
+  position: relative;
+  display: block;
+  width: 100%;
+}
+
+.TextFieldGroup-icon {
+  position: absolute;
+  /* Centered on the first line: border + padding + (line-height - 1em) / 2 */
+  top: calc(9px + 0.25em);
+  z-index: 1;
+  font-size: var(--alinea-font-size-base);
+  color: var(--alinea-fg-muted);
+  pointer-events: none;
+
+  &.is-start {
+    left: 10px;
+  }
+
+  &.is-end {
+    right: 10px;
+  }
+}
+
+.TextFieldGrow {
+  display: grid;
+  width: 100%;
+}
+
+.TextFieldControl {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--alinea-border);
+  border-radius: var(--alinea-radius);
+  outline: 3px solid transparent;
+  background-color: var(--alinea-input);
+  color: var(--alinea-fg);
+  font: inherit;
+  font-size: var(--alinea-font-size-base);
+  line-height: 1.5;
+  transition: var(--alinea-transition);
+  transition-property: border-color, outline-color, opacity;
+
+  &::placeholder {
+    color: var(--alinea-fg-disabled);
+  }
+
+  &:hover {
+    border-color: var(--alinea-border-strong);
+    outline-color: var(--alinea-muted);
+  }
+
+  &:focus {
+    border-color: var(--alinea-primary);
+    outline-color: color-mix(in oklab, var(--alinea-primary) 20%, transparent);
+  }
+
+  &[aria-invalid='true'] {
+    border-color: var(--alinea-danger);
+    outline-color: color-mix(in oklab, var(--alinea-danger) 20%, transparent);
+  }
+
+  &:disabled,
+  &[readonly] {
+    background-color: var(--alinea-bg-muted);
+    color: var(--alinea-fg-disabled);
+  }
+
+  &:disabled {
+    pointer-events: none;
+    opacity: 0.5;
+  }
+
+  .TextFieldGrow & {
+    grid-area: 1 / 1 / 2 / 2;
+    /* The shadow copy sizes the field, a rounding difference would otherwise
+       show a scrollbar where scrollbars take up space (Windows) */
+    overflow: hidden;
+    resize: none;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  /* Past maxRows the shadow stops growing and the textarea scrolls */
+  .TextFieldGrow &.is-limited {
+    overflow-y: auto;
+  }
+
+  &.is-start {
+    padding-left: calc(20px + 1em);
+  }
+
+  &.is-end {
+    padding-right: calc(20px + 1em);
+  }
+
+  &.is-shadow {
+    visibility: hidden;
+  }
+}

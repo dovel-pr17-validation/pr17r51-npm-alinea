@@ -1,0 +1,87 @@
+.SheetContent {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--alinea-bg-muted);
+  color: var(--alinea-fg);
+  outline: none;
+}
+
+.SheetHeader {
+  box-sizing: border-box;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  padding: 0 8px 0 10px;
+  border-bottom: 1px solid var(--alinea-border);
+}
+
+.SheetHeader-back[data-slot] {
+  --alinea-button-accent: var(--alinea-fg-muted);
+}
+
+.SheetTitle {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.SheetBody {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.SheetSection {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px 20px 20px;
+
+  &:not(:first-child) {
+    border-top: 1px solid var(--alinea-border);
+  }
+}
+
+.SheetSection-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--alinea-fg-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 16px;
+  text-transform: uppercase;
+}
+
+.SheetSection-title-icon {
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.SheetFooter {
+  box-sizing: border-box;
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 8px;
+  border-top: 1px solid var(--alinea-border);
+
+  /* Actions read like menu items, one per line */
+  [data-slot='button'] {
+    font-weight: 500;
+  }
+}

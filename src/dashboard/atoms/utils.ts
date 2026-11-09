@@ -1,0 +1,210 @@
+import type {Config} from '#/core/Config.js'
+import {
+  imageEncodingType,
+  imageResizeOptions
+} from '#/core/media/ImageTransform.js'
+import {isPdf} from '#/core/media/Pdf.js'
+import {assertUploadSize} from '#/core/media/UploadLimits.js'
+import type {DragTypes, DropTarget, Key} from '#/components.js'
+import type {WriteableGraph} from '#/core/db/WriteableGraph.js'
+import {DeepMap} from '#/core/util/DeepMap.js'
+import {atom, type Atom, type WritableAtom} from 'jotai'
+import {unwrap} from 'jotai/utils'
+
+type RequiredAtom<Value> = WritableAtom<Value, [Value], void>
+
+const missing = Symbol('required atom missing')
+
+export function requiredAtom<Value>(name: string): RequiredAtom<Value> {
+  const valueAtom = atom<Value | typeof missing>(missing)
+  const result = atom(
+    get => {
+      const value = get(valueAtom)
+      if (value === missing)
+        throw new Error(`Required atom "${name}" was not initialized`)
+      return value
+    },
+    (_get, set, value: Value) => set(valueAtom, value)
+  )
+  result.debugLabel = name
+  return result
+}
+
+export function atomWithPending<Value>(
+  asyncAtom: Atom<Promise<Value> | Value>
+) {
+  const wrappedAtom = atom(async get => {
+    const data = await get(asyncAtom)
+    return [false, data] as const
+  })
+  return unwrap(wrappedAtom, previous => [true, previous?.[1]] as const)
+}
+
+export function pendingTimerAtom(bufferMs: number, minimumMs: number) {
+  const startTimeAtom = atom<number>()
+  const timeoutAtom = atom<ReturnType<typeof setTimeout>>()
+  const isPendingAtom = atom(false)
+
+  return atom(
+    get => get(isPendingAtom),
+    (get, set, pending: boolean) => {
+      const isPending = get(isPendingAtom)
+      const timeout = get(timeoutAtom)
+
+      if (pending) {
+        if (isPending) {
+          if (timeout !== undefined) {
+            clearTimeout(timeout)
+            set(timeoutAtom, undefined)
+          }
+          return
+        }
+        if (timeout !== undefined) return
+        set(startTimeAtom, Date.now())
+        set(
+          timeoutAtom,
+          setTimeout(() => {
+            set(startTimeAtom, Date.now())
+            set(isPendingAtom, true)
+            set(timeoutAtom, undefined)
+          }, bufferMs)
+        )
+        return
+      }
+
+      if (!isPending) {
+        if (timeout !== undefined) clearTimeout(timeout)
+        set(startTimeAtom, undefined)
+        set(timeoutAtom, undefined)
+        return
+      }
+      if (timeout !== undefined) return
+      const elapsed = Date.now() - (get(startTimeAtom) ?? Date.now())
+      set(
+        timeoutAtom,
+        setTimeout(
+          () => {
+            set(startTimeAtom, undefined)
+            set(isPendingAtom, false)
+            set(timeoutAtom, undefined)
+          },
+          Math.max(0, minimumMs - elapsed)
+        )
+      )
+    }
+  )
+}
+
+export function dispense<Keys extends ReadonlyArray<unknown>, Value>(
+  fn: (...keys: Keys) => Value
+): (...keys: Keys) => Value {
+  const values = new DeepMap<Keys, Value>()
+  return function dispenseValue(...keys: Keys) {
+    if (!values.has(keys)) values.set(keys, fn(...keys))
+    return values.get(keys)!
+  }
+}
+
+type Result<Value> = [value: Value, error: null] | [value: null, error: Error]
+type BatchLoadFn<V> = (
+  keys: ReadonlyArray<string>
+) => Promise<ReadonlyArray<Result<V>>>
+export function loader<Value>(fn: BatchLoadFn<Value>) {
+  let batch: {key: string; resolve: (v: Result<Value>) => void}[] = []
+  return (key: string): Promise<Result<Value>> => {
+    return new Promise(resolve => {
+      if (batch.push({key, resolve}) === 1) {
+        queueMicrotask(async () => {
+          const current = batch
+          batch = []
+          try {
+            const result = await fn(current.map(i => i.key))
+            for (const [index, item] of current.entries())
+              item.resolve(
+                result[index] ?? [
+                  null,
+                  new Error(`Missing result for ${item.key}`)
+                ]
+              )
+          } catch (e) {
+            const err = e instanceof Error ? e : new Error(String(e))
+            for (const item of current) item.resolve([null, err])
+          }
+        })
+      }
+    })
+  }
+}
+
+export const dashboardEntryDragType = 'application/x-alinea-entry-id'
+
+export const dashboardEntryDragTypes = [
+  dashboardEntryDragType,
+  'text/plain'
+] as const
+
+export function acceptsDashboardEntryDrag(types: DragTypes): boolean {
+  return dashboardEntryDragTypes.some(type => types.has(type))
+}
+
+export function dashboardEntryDragItem(id: Key): Record<string, string> {
+  const key = String(id)
+  return {
+    'text/plain': key,
+    [dashboardEntryDragType]: key
+  }
+}
+
+/** Unique entry ids from the items dropped on an entry list */
+export function dashboardEntryDropIds(
+  items: Iterable<Record<string, string>>
+): Array<string> {
+  const ids = new Set<string>()
+  for (const item of items) {
+    const id = item[dashboardEntryDragType] ?? item['text/plain']
+    if (id) ids.add(id)
+  }
+  return [...ids]
+}
+
+/**
+ * Moves entries onto, before or after the target. Entries placed before or
+ * after it keep the order they are given in.
+ */
+export async function moveEntries(
+  graph: WriteableGraph,
+  ids: Iterable<string>,
+  target: DropTarget
+): Promise<void> {
+  let {position, key} = target
+  for (const id of ids) {
+    await graph.move({
+      id,
+      target: String(key),
+      targetType: 'entry',
+      dropPosition: position
+    })
+    if (position === 'on') continue
+    // The next entry follows the one just moved
+    position = 'after'
+    key = id
+  }
+}
+
+export function uploadSizeError(
+  file: File,
+  config: Pick<Config, 'maxUploadSize' | 'resizeImages'>,
+  compressPdf = false
+): string | undefined {
+  const {maxUploadSize, resizeImages} = config
+  // Images scaled down and pdfs compressed before the upload are checked
+  // after that
+  if (imageResizeOptions(resizeImages) && imageEncodingType(file.name))
+    return undefined
+  if (compressPdf && isPdf(file.name)) return undefined
+  try {
+    assertUploadSize(file.name, file.size, maxUploadSize)
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+}

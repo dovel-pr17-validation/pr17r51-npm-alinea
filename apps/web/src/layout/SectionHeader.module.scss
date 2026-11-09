@@ -1,0 +1,49 @@
+@use '@/style' as *;
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: var(--web-reading-width);
+
+  @include sm {
+    gap: 12px;
+  }
+
+  &-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px 16px;
+  }
+
+  &-title {
+    margin: 0;
+    font-family: var(--web-title-font);
+    font-weight: 500;
+    font-size: 32px;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    color: var(--web-foreground);
+
+    @include sm {
+      font-size: 26px;
+    }
+  }
+
+  &-label {
+    flex-shrink: 0;
+  }
+
+  &-description {
+    margin: 0;
+    max-width: 560px;
+    font-size: 19px;
+    line-height: 1.55;
+    color: var(--web-foreground-faded);
+
+    @include sm {
+      font-size: 17px;
+    }
+  }
+}

@@ -1,0 +1,263 @@
+import {
+  BlockNode,
+  ElementNode,
+  Mark,
+  Node,
+  TextNode,
+  type TextDoc
+} from '#/core/TextDoc.js'
+import {
+  getRenderedAttributes,
+  type Editor,
+  type JSONContent
+} from '@tiptap/core'
+import type {Node as ProseMirrorNode} from '@tiptap/pm/model'
+import {
+  blockAttributes,
+  decodeBlockValue,
+  richTextBlockValueAttribute
+} from './RichTextBlockValue.js'
+import {isRecord} from '#/core/util/Objects.js'
+
+/** Include data attributes produced by custom extensions in the stored document. */
+export function editorDocument(editor: Editor): JSONContent {
+  // The extension manager recomputes this list on every access
+  const attributes = editor.extensionManager.attributes
+  function serialize(node: ProseMirrorNode): JSONContent {
+    const content: JSONContent = node.toJSON()
+    if (!node.isText) {
+      const dataAttributes = Object.fromEntries(
+        Object.entries(getRenderedAttributes(node, attributes)).filter(
+          ([key, value]) => key.startsWith('data-') && value != null
+        )
+      )
+      if (Object.keys(dataAttributes).length)
+        content.attrs = {...content.attrs, ...dataAttributes}
+      if (node.childCount) {
+        content.content = []
+        node.forEach(child => content.content!.push(serialize(child)))
+      }
+    }
+    return content
+  }
+  return serialize(editor.state.doc)
+}
+
+export function editorContent(
+  nodes: TextDoc,
+  images?: ReadonlyMap<string, {src: string; alt: string}>
+): JSONContent {
+  return {
+    type: 'doc',
+    content: nodes.length
+      ? nodes.map(node => nodeToContent(node, images))
+      : [{type: 'paragraph'}]
+  }
+}
+
+export function editorNodes(
+  content: JSONContent,
+  resolveBlock?: (
+    id: string,
+    typeName: string,
+    snapshot: BlockNode | undefined
+  ) => BlockNode | undefined
+): TextDoc {
+  const nodes =
+    content.content?.flatMap(node => contentToNodes(node, resolveBlock)) ?? []
+  return isEmptyDocument(nodes) ? [] : nodes
+}
+
+function nodeToContent(
+  node: Node,
+  images: ReadonlyMap<string, {src: string; alt: string}> | undefined
+): JSONContent {
+  if (isBlock(node)) {
+    return {
+      type: node[Node.type],
+      attrs: blockAttributes(node)
+    }
+  }
+  if (isText(node)) {
+    return {
+      type: 'text',
+      text: node[TextNode.text],
+      marks: node[TextNode.marks]?.map(markToContent)
+    }
+  }
+  if (isElement(node)) {
+    const {
+      [Node.type]: type,
+      [ElementNode.content]: content,
+      marks,
+      ...attrs
+    } = node
+    const resolvedImage =
+      type === 'image' && typeof attrs._entry === 'string'
+        ? images?.get(attrs._entry)
+        : undefined
+    let editorContent = content
+    // Tiptap requires list items to contain paragraphs, so normalize imported
+    // inline content before passing it to the editor.
+    if (type === 'listItem' && content?.some(isText)) {
+      const normalized: TextDoc = []
+      editorContent = normalized
+      let inline: TextDoc = []
+      function flushInline() {
+        if (!inline.length) return
+        normalized.push({
+          [Node.type]: 'paragraph',
+          [ElementNode.content]: inline
+        })
+        inline = []
+      }
+      for (const child of content) {
+        if (isText(child)) {
+          inline.push(child)
+        } else {
+          flushInline()
+          normalized.push(child)
+        }
+      }
+      flushInline()
+    }
+    return {
+      type,
+      attrs: withoutNullish({...attrs, ...resolvedImage}),
+      marks: marks?.map(markToContent),
+      content: editorContent?.map(child => nodeToContent(child, images))
+    }
+  }
+  throw new TypeError(
+    'Embedded blocks cannot be placed inside an editor segment'
+  )
+}
+
+function contentToNodes(
+  content: JSONContent,
+  resolveBlock?: (
+    id: string,
+    typeName: string,
+    snapshot: BlockNode | undefined
+  ) => BlockNode | undefined
+): TextDoc {
+  const {type, text, marks, attrs} = content
+  if (!type) return []
+  if (Node.isBlock({[Node.type]: type})) {
+    const decodedSnapshot = decodeBlockValue(
+      attrs?.[richTextBlockValueAttribute]
+    )
+    const id = String(
+      attrs?.[BlockNode.id] ?? decodedSnapshot?.[BlockNode.id] ?? ''
+    )
+    const snapshot = isMatchingBlock(decodedSnapshot, id, type)
+      ? decodedSnapshot
+      : undefined
+    const resolved = resolveBlock?.(id, type, snapshot)
+    const block = isMatchingBlock(resolved, id, type) ? resolved : snapshot
+    return block
+      ? [block]
+      : [{[Node.type]: type, [BlockNode.id]: id} as BlockNode]
+  }
+  if (type === 'text') {
+    const node: TextNode = {
+      [Node.type]: 'text',
+      [TextNode.text]: text
+    }
+    if (marks?.length) node[TextNode.marks] = marks.map(contentToMark)
+    return [node]
+  }
+  const {[richTextBlockValueAttribute]: _blockSnapshot, ...elementAttributes} =
+    attrs ?? {}
+  if (
+    type === 'image' &&
+    elementAttributes._link === 'image' &&
+    typeof elementAttributes._entry === 'string'
+  ) {
+    delete elementAttributes.src
+    delete elementAttributes.alt
+  }
+  const children = content.content?.flatMap(node =>
+    contentToNodes(node, resolveBlock)
+  )
+  return [
+    {
+      [Node.type]: type,
+      ...withoutNullish(elementAttributes),
+      ...(marks?.length ? {marks: marks.map(contentToMark)} : {}),
+      ...(children === undefined ? {} : {[ElementNode.content]: children})
+    }
+  ]
+}
+
+function markToContent(mark: Mark): NonNullable<JSONContent['marks']>[number] {
+  const {[Mark.type]: type, ...attributes} = mark
+  return {
+    type,
+    attrs: Object.fromEntries(
+      Object.entries(attributes).map(([key, value]) => [
+        key.startsWith('_') ? `data-${key.slice(1)}` : key,
+        value
+      ])
+    )
+  }
+}
+
+function contentToMark(content: JSONContent): Mark {
+  const attributes = Object.fromEntries(
+    Object.entries(content.attrs ?? {})
+      .filter(
+        (entry): entry is [string, string] => typeof entry[1] === 'string'
+      )
+      .map(([key, value]) => [
+        key.startsWith('data-') ? `_${key.slice(5)}` : key,
+        value
+      ])
+  )
+  return {[Mark.type]: content.type ?? '', ...attributes}
+}
+
+function withoutNullish(
+  attributes: Record<string, unknown> | undefined
+): Record<string, unknown> | undefined {
+  if (!attributes) return
+  const result = Object.fromEntries(
+    Object.entries(attributes).filter(([, value]) => value != null)
+  )
+  return Object.keys(result).length ? result : undefined
+}
+
+function isEmptyDocument(nodes: TextDoc): boolean {
+  if (nodes.length !== 1) return false
+  const [node] = nodes
+  return (
+    isElement(node) &&
+    node[Node.type] === 'paragraph' &&
+    (node[ElementNode.content]?.length ?? 0) === 0
+  )
+}
+
+function isText(value: unknown): value is TextNode {
+  return isRecord(value) && Node.isText(value)
+}
+
+function isElement(value: unknown): value is ElementNode {
+  return isRecord(value) && Node.isElement(value)
+}
+
+function isBlock(value: unknown): value is BlockNode {
+  return isRecord(value) && Node.isBlock(value)
+}
+
+function isMatchingBlock(
+  value: unknown,
+  id: string,
+  typeName: string
+): value is BlockNode {
+  return (
+    isBlock(value) &&
+    value[Node.type] === typeName &&
+    typeof value[BlockNode.id] === 'string' &&
+    value[BlockNode.id] === id
+  )
+}

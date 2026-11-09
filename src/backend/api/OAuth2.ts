@@ -1,0 +1,371 @@
+import {AuthResultType} from '#/cloud/AuthResult.js'
+import {Config} from '#/core/Config.js'
+import type {
+  AuthApi,
+  AuthOptions,
+  AuthedContext,
+  RequestContext
+} from '#/core/Connection.js'
+import {ErrorCode, HttpError} from '#/core/HttpError.js'
+import {createId} from '#/core/Id.js'
+import {outcome} from '#/core/Outcome.js'
+import type {User} from '#/core/User.js'
+import {assert} from '#/core/util/Assert.js'
+import {decode, type JWTHeader, JWTPayload, verify} from '#/core/util/JWT.js'
+import {Request, Response} from '@alinea/iso'
+import {
+  generateCodeVerifier,
+  OAuth2Client,
+  type OAuth2Token
+} from '@badgateway/oauth2-client'
+import {parse} from 'cookie-es'
+import {
+  AuthAction,
+  InvalidCredentialsError,
+  MissingCredentialsError
+} from '../Auth.js'
+import {router} from '../router/Router.js'
+import {jwks, type WebKey} from '../util/JWKS.js'
+
+export interface OAuth2Options {
+  /**
+   * OAuth2 clientId
+   */
+  clientId: string
+
+  /**
+   * OAuth2 clientSecret
+   *
+   * This is required when using the 'client_secret_basic' authenticationMethod
+   * for the client_credentials and password flows, but not authorization_code
+   * or implicit.
+   */
+  clientSecret?: string
+
+  /**
+   * The JSON Web Key Set (JWKS) URI.
+   */
+  jwksUri: string
+
+  /**
+   * The /authorize endpoint.
+   *
+   * Required only for the browser-portion of the authorization_code flow.
+   */
+  authorizationEndpoint: string
+
+  /**
+   * The token endpoint.
+   *
+   * Required for most grant types and refreshing tokens.
+   */
+  tokenEndpoint: string
+
+  /**
+   * Revocation endpoint.
+   *
+   * Required for revoking tokens. Not supported by all servers.
+   */
+  revocationEndpoint?: string
+
+  /**
+   * Validate provider-specific claims, including `iss` and `aud`.
+   * If the claims are invalid, an error should be thrown.
+   */
+  validateClaims(claims: JWTPayload): void | Promise<void>
+}
+
+const COOKIE_VERIFIER = 'alinea.cv'
+const COOKIE_ACCESS_TOKEN = 'alinea.at'
+const COOKIE_REFRESH_TOKEN = 'alinea.rt'
+
+export class OAuth2 implements AuthApi {
+  #context: RequestContext
+  #config: Config
+  #client: OAuth2Client
+  #jwksUri: string
+  #validateClaims: OAuth2Options['validateClaims']
+
+  constructor(context: RequestContext, config: Config, options: OAuth2Options) {
+    assert(
+      typeof options.validateClaims === 'function',
+      'OAuth2 validateClaims is required'
+    )
+    this.#context = context
+    this.#config = config
+    this.#validateClaims = options.validateClaims
+    this.#client = new OAuth2Client({
+      ...options,
+      authenticationMethod: 'client_secret_basic_interop',
+      fetch: (async (input, init) => {
+        const request = new Request(input, init)
+        const response = await fetch(request)
+        if (!response.ok) {
+          const text = await response.text()
+          throw new HttpError(response.status, text)
+        }
+        return response
+      }) as typeof fetch
+    })
+    this.#jwksUri = options.jwksUri
+  }
+
+  async #key(token: string): Promise<JsonWebKey> {
+    const {header} = decode(token)
+    const keys = await jwks(this.#jwksUri, header.kid).catch(cause => {
+      throw new HttpError(ErrorCode.ServiceUnavailable, 'Remote unavailable', {
+        cause
+      })
+    })
+    return selectKey(keys, header)
+  }
+
+  get #redirectUri(): URL {
+    const url = new URL(this.#context.handlerUrl)
+    url.searchParams.set('auth', 'login')
+    return url
+  }
+
+  async authenticate(
+    request: Request,
+    options: AuthOptions
+  ): Promise<Response> {
+    try {
+      const url = new URL(request.url)
+      const action = url.searchParams.get('auth')
+      const redirectUri = this.#redirectUri
+      switch (action) {
+        case AuthAction.Status: {
+          const [ctx, err] = await outcome(this.verify(request))
+          if (err instanceof Response) return err
+          if (ctx) {
+            return Response.json({
+              type: AuthResultType.Authenticated,
+              ...(await options.authenticated(ctx.user))
+            })
+          }
+          const codeVerifier = await generateCodeVerifier()
+          const state = createId()
+          const redirectUrl =
+            await this.#client.authorizationCode.getAuthorizeUri({
+              redirectUri: redirectUri.toString(),
+              state,
+              codeVerifier
+            })
+          return Response.json(
+            {
+              type: AuthResultType.UnAuthenticated,
+              redirect: redirectUrl
+            },
+            {
+              headers: {
+                'set-cookie': router.cookie({
+                  name: COOKIE_VERIFIER,
+                  value: codeVerifier,
+                  path: redirectUri.pathname,
+                  secure: redirectUri.protocol === 'https:',
+                  httpOnly: true,
+                  sameSite: 'lax'
+                })
+              }
+            }
+          )
+        }
+        case AuthAction.Login: {
+          const code = url.searchParams.get('code')
+          const state = url.searchParams.get('state')
+          if (!code || !state)
+            throw new HttpError(400, 'Missing code or state parameter')
+          const cookieHeader = request.headers.get('cookie')
+          if (!cookieHeader) throw new HttpError(400, 'Missing cookies')
+          const {[COOKIE_VERIFIER]: codeVerifier} = parse(cookieHeader)
+          if (!codeVerifier)
+            throw new HttpError(400, 'Missing code verifier cookie')
+          const token = await this.#client.authorizationCode.getToken({
+            redirectUri: redirectUri.toString(),
+            code,
+            codeVerifier
+          })
+          assert(token.refreshToken, 'Missing refresh token in response')
+
+          const config = this.#config
+          let dashboardPath = Config.adminPath(config)
+          if (!dashboardPath.startsWith('/'))
+            dashboardPath = `/${dashboardPath}`
+          const dashboardUrl = new URL(dashboardPath, url)
+          return router.redirect(dashboardUrl, {
+            headers: {
+              'set-cookie': tokenToCookie(token, redirectUri)
+            }
+          })
+        }
+        case AuthAction.Logout: {
+          const cookieHeader = request.headers.get('cookie')
+          if (!cookieHeader) throw new HttpError(400, 'Missing cookies')
+          const cookies = parse(cookieHeader)
+          const accessToken = cookies[COOKIE_ACCESS_TOKEN]
+          const refreshToken = cookies[COOKIE_REFRESH_TOKEN]
+          const token = {accessToken, refreshToken, expiresAt: null}
+          await this.#client.revoke(token).catch(() => {})
+          return new Response(undefined, {
+            status: 204,
+            headers: {
+              'set-cookie': clearCookies(redirectUri)
+            }
+          })
+        }
+        default:
+          return new Response('Bad request', {status: 400})
+      }
+    } catch (error) {
+      if (error instanceof HttpError)
+        return new Response(error.message, {status: error.code})
+      return Response.json(
+        error instanceof Error ? error.message : 'Unknown error',
+        {status: 401}
+      )
+    }
+  }
+
+  async verify(request: Request): Promise<AuthedContext> {
+    const ctx = this.#context
+    const cookieHeader = request.headers.get('cookie')
+    if (!cookieHeader) throw new MissingCredentialsError('Missing cookies')
+    const {
+      [COOKIE_ACCESS_TOKEN]: accessToken,
+      [COOKIE_REFRESH_TOKEN]: refreshToken
+    } = parse(cookieHeader)
+    try {
+      if (!accessToken)
+        throw new MissingCredentialsError('Missing access token cookie')
+      const key = await this.#key(accessToken)
+      const user = await verify<JWTPayload & User>(accessToken, key)
+      await this.#validateClaims(user)
+      assert(user.exp, 'Missing exp claim in access token')
+      const expiresSoon = user.exp - Math.floor(Date.now() / 1000) < 30
+      if (expiresSoon && refreshToken)
+        throw new InvalidCredentialsError('Access token will expire soon') // Trigger refresh
+      return {...ctx, user, token: accessToken}
+    } catch (error) {
+      if (!refreshToken) throw error
+      // Refreshing can't help while the keys can't be loaded, and would use
+      // up the refresh token
+      if (
+        error instanceof HttpError &&
+        error.code === ErrorCode.ServiceUnavailable
+      )
+        throw error
+      // Access token is not valid, but we have a refresh token
+      const token = {accessToken, refreshToken, expiresAt: null}
+      const newToken = await this.#client.refreshToken(token).catch(cause => {
+        throw new InvalidCredentialsError('Failed to refresh token', {
+          cause: [cause, error]
+        })
+      })
+      const key = await this.#key(newToken.accessToken)
+      const user = await verify<JWTPayload & User>(newToken.accessToken, key, {
+        clockTolerance: 30
+      }).catch(cause => {
+        throw new InvalidCredentialsError('Failed to verify user', {
+          cause: [cause, error]
+        })
+      })
+      await this.#validateClaims(user)
+      // Respond with 401 and instruct the client to retry request
+      throw Response.json(
+        {type: AuthResultType.NeedsRefresh},
+        {
+          status: 401,
+          headers: {
+            'set-cookie': tokenToCookie(newToken, this.#redirectUri)
+          }
+        }
+      )
+    }
+  }
+}
+
+function selectKey(jwks: Array<WebKey>, header: JWTHeader): JsonWebKey {
+  const kid = header.kid
+  const alg = header.alg
+
+  // Token has no Key ID
+  if (!kid) {
+    // If the provider only publishes exactly one key, it's safe to assume it's the right one
+    if (jwks.length === 1) {
+      const key = jwks[0]
+      // Ensure the key type and algorithm match what the token claims to use
+      if (key.alg && alg && key.alg !== alg) {
+        throw new Error(
+          `Algorithm mismatch: token uses ${alg}, but key specifies ${key.alg}`
+        )
+      }
+      return key
+    }
+
+    // If there are multiple keys and no kid, it is cryptographically ambiguous
+    throw new Error(
+      'Token is missing "kid" header, and JWKS contains multiple keys'
+    )
+  }
+
+  // Token has a Key ID, find the exact match
+  const key = jwks.find(k => k.kid === kid)
+  if (!key) throw new Error(`No key found for kid: ${kid}`)
+
+  // Verify the algorithm matches to prevent algorithm confusion
+  if (key.alg && alg && key.alg !== alg)
+    throw new Error(
+      `Algorithm mismatch: token uses ${alg}, but key specifies ${key.alg}`
+    )
+
+  return key
+}
+
+function clearCookies(redirectUri: URL): string {
+  return router.cookie(
+    {
+      name: COOKIE_ACCESS_TOKEN,
+      value: '',
+      expires: new Date(0),
+      path: '/',
+      secure: redirectUri.protocol === 'https:',
+      httpOnly: true,
+      sameSite: 'lax'
+    },
+    {
+      name: COOKIE_REFRESH_TOKEN,
+      value: '',
+      expires: new Date(0),
+      path: redirectUri.pathname,
+      secure: redirectUri.protocol === 'https:',
+      httpOnly: true,
+      sameSite: 'strict'
+    }
+  )
+}
+
+function tokenToCookie(token: OAuth2Token, redirectUri: URL): string {
+  assert(token.refreshToken, 'Missing refresh token in response')
+  return router.cookie(
+    {
+      name: COOKIE_ACCESS_TOKEN,
+      value: token.accessToken,
+      expires: token.expiresAt ? new Date(token.expiresAt) : undefined,
+      path: '/',
+      secure: redirectUri.protocol === 'https:',
+      httpOnly: true,
+      sameSite: 'lax'
+    },
+    {
+      name: COOKIE_REFRESH_TOKEN,
+      value: token.refreshToken,
+      expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+      // TODO: make sure we can create a separate path to do refreshes
+      path: redirectUri.pathname,
+      secure: redirectUri.protocol === 'https:',
+      httpOnly: true,
+      sameSite: 'strict'
+    }
+  )
+}

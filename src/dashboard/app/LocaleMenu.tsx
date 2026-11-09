@@ -1,0 +1,134 @@
+import {
+  Button,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+  Icon
+} from '#/components.js'
+import type {RootAtoms} from '#/dashboard/atoms/root.js'
+import styler from '@alinea/styler'
+import {useAtomValueRaw} from 'jotai'
+import {IcRoundUnfoldMore} from '../icons.js'
+import css from './LocaleMenu.module.css'
+
+const styles = styler(css)
+
+interface LocaleMenuProps {
+  root: RootAtoms
+  locale: string | null
+  size?: 'default' | 'lg'
+  onLocaleChange(locale: string): void
+}
+
+export interface LocaleMenuSelectProps {
+  ariaLabel?: string
+  size?: 'default' | 'lg'
+  locale: string | null
+  locales: ReadonlyArray<string>
+  onLocaleChange(locale: string): void
+}
+
+interface LocaleDisplay {
+  code: string | null
+  name: string
+  textValue: string
+}
+
+interface LocaleLabelProps {
+  locale: string
+}
+
+function localeDisplay(locale: string): LocaleDisplay {
+  let parsed: Intl.Locale
+  try {
+    parsed = new Intl.Locale(locale)
+  } catch {
+    return {code: null, name: locale, textValue: locale}
+  }
+  const languages = new Intl.DisplayNames(undefined, {type: 'language'})
+  const language = languages.of(parsed.language)
+  const code = locale.toUpperCase()
+  if (!language) return {code: null, name: locale, textValue: locale}
+  if (!parsed.region)
+    return {code, name: language, textValue: `${code} ${language}`}
+  const regions = new Intl.DisplayNames(undefined, {type: 'region'})
+  const region = regions.of(parsed.region)
+  const name = region ? `${language} (${region})` : language
+  return {code, name, textValue: `${code} ${name}`}
+}
+
+function LocaleLabel({locale}: LocaleLabelProps) {
+  const display = localeDisplay(locale)
+  if (!display.code)
+    return <span className={styles.LocaleMenu.label()}>{display.name}</span>
+  return (
+    <span className={styles.LocaleMenu.label()}>
+      <span className={styles.LocaleMenu.label.code()}>{display.code}</span>
+      <span className={styles.LocaleMenu.label.fullName()}>{display.name}</span>
+    </span>
+  )
+}
+
+export function LocaleMenu({
+  root,
+  locale,
+  size,
+  onLocaleChange
+}: LocaleMenuProps) {
+  const i18n = useAtomValueRaw(root.i18n)
+  if (!i18n) return null
+  return (
+    <LocaleMenuSelect
+      locale={locale}
+      locales={i18n.locales}
+      size={size}
+      onLocaleChange={onLocaleChange}
+    />
+  )
+}
+
+export function LocaleMenuSelect({
+  ariaLabel = 'Language',
+  locale,
+  locales,
+  size = 'default',
+  onLocaleChange
+}: LocaleMenuSelectProps) {
+  const activeLocale = locale ?? locales[0]
+  if (!activeLocale) return null
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          aria-label={ariaLabel}
+          className={styles.LocaleMenu.trigger({lg: size === 'lg'})}
+        >
+          <LocaleLabel locale={activeLocale} />
+          <Icon
+            icon={IcRoundUnfoldMore}
+            className={styles.LocaleMenu.trigger.icon()}
+          />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent aria-label={ariaLabel} side="bottom" align="end">
+        <DropdownMenuRadioGroup
+          value={activeLocale}
+          onValueChange={onLocaleChange}
+        >
+          {locales.map(locale => (
+            <DropdownMenuRadioItem
+              key={locale}
+              value={locale}
+              textValue={localeDisplay(locale).textValue}
+            >
+              <LocaleLabel locale={locale} />
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}

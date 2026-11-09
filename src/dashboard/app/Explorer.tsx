@@ -1,0 +1,748 @@
+import {
+  Button,
+  FileTrigger,
+  type Key,
+  PageBack,
+  PageContent,
+  PageHeader,
+  PageTitle,
+  SearchField,
+  Switch,
+  ToggleGroup,
+  ToggleGroupItem
+} from '#/components.js'
+import {getRoot, getWorkspace} from '#/core/Internal.js'
+import type {OverviewActionProps, OverviewHeaderProps} from '#/core/Overview.js'
+import {resolveView} from '#/core/View.js'
+import {slugify} from '#/core/util/Slugs.js'
+import {ViewToggle} from './ViewToggle.js'
+import styler from '@alinea/styler'
+import {useAtom, useAtomValueRaw, useAtomValueRawSync, useSetAtom} from 'jotai'
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+  type KeyboardEvent,
+  type ReactNode
+} from 'react'
+import {configAtom, viewsAtom} from '../atoms/core.js'
+import {
+  type DashboardEntry,
+  type DashboardExplorer,
+  explorerPageIsPending,
+  type ExplorerParent,
+  type ExplorerReadyPage
+} from '../atoms/explorer.js'
+import {
+  IcRoundAccountTree,
+  IcRoundFilterList,
+  IcRoundSearch,
+  IcRoundUploadFile
+} from '../icons.js'
+import css from './Explorer.module.css'
+import {ExplorerBatchActions} from './ExplorerBatchActions.js'
+import {ExplorerBreadcrumbs, ExplorerParentBack} from './ExplorerBreadcrumbs.js'
+import {ExplorerControls} from './ExplorerControls.js'
+import {ExplorerList} from './ExplorerList.js'
+import {ExplorerOverviewHeader} from './ExplorerOverviewHeader.js'
+import {ExplorerScope} from './ExplorerScope.js'
+import {ExplorerTabs} from './ExplorerTabs.js'
+import {LocaleMenuSelect} from './LocaleMenu.js'
+import {ActivityStatus} from './ActivityStatus.js'
+import {ReadOnlyBadge} from './ReadOnlyBadge.js'
+
+const styles = styler(css)
+
+export interface ExplorerProps {
+  controls?: ReactNode
+  explorer: DashboardExplorer
+  headerEntry?: ExplorerHeaderEntry
+  page: ExplorerReadyPage
+  readOnly?: boolean
+  titleControls?: ReactNode
+}
+
+export interface ExplorerHeaderEntry {
+  backLabel: string
+  title: string
+  onBack(): void
+}
+
+export interface ExplorerHeaderProps {
+  autoFocusSearch?: boolean
+  /** Called when escape is pressed in the search field */
+  onSearchEscape?: () => void
+  controls?: ReactNode
+  explorer: DashboardExplorer
+  headerEntry?: ExplorerHeaderEntry
+  navigate?: boolean
+  page: ExplorerReadyPage
+  readOnly?: boolean
+  titleControls?: ReactNode
+}
+
+export interface ExplorerBodyProps {
+  compactTable?: boolean
+  explorer: DashboardExplorer
+  /**
+   * Called when a selectable entry is clicked, pickers that select a single
+   * entry confirm it right away
+   */
+  onPick?: (entry: DashboardEntry) => void
+  page: ExplorerReadyPage
+  /** Floats over the list, such as the actions on the selected entries */
+  children?: ReactNode
+}
+
+interface ExplorerSearchProps {
+  autoFocus?: boolean
+  /** A search field of its own, instead of the header row of the results */
+  boxed?: boolean
+  explorer: DashboardExplorer
+  onEntryAction?: (entry: DashboardEntry) => void
+  onEscape?: () => void
+  page: ExplorerReadyPage
+}
+
+/** The closest element that scrolls vertically, starting at `element` */
+function scrollParent(element: HTMLElement): HTMLElement | undefined {
+  let current: HTMLElement | null = element
+  while (current) {
+    const {overflowY} = getComputedStyle(current)
+    if (
+      (overflowY === 'auto' || overflowY === 'scroll') &&
+      current.scrollHeight > current.clientHeight
+    )
+      return current
+    current = current.parentElement
+  }
+  return undefined
+}
+
+function findResult(results: HTMLElement | null, key: string) {
+  return results?.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`)
+}
+
+interface ExplorerHeaderMainProps {
+  explorer: DashboardExplorer
+  headerEntry?: ExplorerHeaderEntry
+  page: ExplorerReadyPage
+  titleControls?: ReactNode
+}
+
+interface ExplorerHeaderParentMainProps {
+  explorer: DashboardExplorer
+  parent: ExplorerParent
+  titleControls?: ReactNode
+}
+
+export function ExplorerSearch({
+  autoFocus,
+  boxed,
+  explorer,
+  onEntryAction,
+  onEscape,
+  page
+}: ExplorerSearchProps) {
+  const items = page.items
+  const [selection, setSelection] = useAtom(explorer.selection)
+  const search = useAtomValueRaw(explorer.search)
+  const setSearch = useSetAtom(explorer.search)
+  const performAction = useSetAtom(explorer.onAction)
+  const [inputValue, setInputValue] = useState(search)
+  const [isPending, startTransition] = useTransition()
+  const inputId = useId()
+
+  // Focus natively rather than through react-aria's autoFocus: it defers
+  // focus until transitions end for screen reader users, by which time an
+  // opening dialog has moved focus to itself
+  useEffect(() => {
+    // Focusing on mount is not an event handler
+    // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler
+    if (autoFocus) document.getElementById(inputId)?.focus()
+  }, [autoFocus, inputId])
+
+  function selectEntry(entry: DashboardEntry | undefined) {
+    if (!entry) return
+    setSelection(new Set<Key>([entry.id]))
+  }
+
+  const selectedEntry = useMemo(() => {
+    if (selection === 'all') return undefined
+    const [selected] = selection
+    if (selected === undefined) return undefined
+    return items.find(item => item.id === String(selected))
+  }, [items, selection])
+
+  // Search results resolve asynchronously, so selection must be reconciled
+  // after the result set changes.
+  // eslint-disable react-you-might-not-need-an-effect/no-adjust-state-on-prop-change
+  // eslint-disable react-you-might-not-need-an-effect/no-event-handler
+  // A new query starts at its best match.
+  const selectedForSearch = useRef(page.search)
+  useEffect(() => {
+    if (!explorer.autoSelectFirstItem || !explorer.hasSelection) return
+    if (items.length === 0) {
+      if (selection !== 'all' && selection.size > 0)
+        setSelection(new Set<Key>())
+      return
+    }
+    const searchChanged = selectedForSearch.current !== page.search
+    selectedForSearch.current = page.search
+    if (!selectedEntry || searchChanged)
+      setSelection(new Set<Key>([items[0].id]))
+  }, [
+    explorer.autoSelectFirstItem,
+    explorer.hasSelection,
+    items,
+    page.search,
+    selectedEntry,
+    selection,
+    setSelection
+  ])
+  // eslint-enable react-you-might-not-need-an-effect/no-adjust-state-on-prop-change
+  // eslint-enable react-you-might-not-need-an-effect/no-event-handler
+
+  // In search mode the field is a combobox: focus stays in the field while
+  // the arrow keys move the active result, announced by its element id
+  const isCombobox = explorer.mode === 'search' && explorer.hasSelection
+  const showsResults = isCombobox && Boolean(page.search.trim())
+  const [combobox, setCombobox] = useState<{
+    controls?: string
+    active?: string
+  }>({})
+  const revealActive = useRef(false)
+  // Result rows are virtualized, their elements exist only after rendering
+  useLayoutEffect(() => {
+    if (!isCombobox) return
+    const results = document
+      .getElementById(explorer.resultsId)
+      ?.querySelector<HTMLElement>('[role="treegrid"], [role="grid"]')
+    const key = showsResults ? selectedEntry?.id : undefined
+    const controls = showsResults ? results?.id || undefined : undefined
+    function update(row: HTMLElement | null | undefined) {
+      const active = row?.id || undefined
+      setCombobox(current =>
+        current.controls === controls && current.active === active
+          ? current
+          : {controls, active}
+      )
+    }
+    if (!key || !results) return update(undefined)
+    const reveal = revealActive.current
+    revealActive.current = false
+    const row = findResult(results, key)
+    if (row) {
+      if (reveal) row.scrollIntoView({block: 'nearest'})
+      return update(row)
+    }
+    update(undefined)
+    if (reveal) {
+      // Scroll to the estimated position so the row gets rendered
+      const scroller = scrollParent(results)
+      const index = items.findIndex(item => item.id === key)
+      if (scroller && index > -1)
+        scroller.scrollTop =
+          (index / items.length) * scroller.scrollHeight -
+          scroller.clientHeight / 2
+    }
+    const observer = new MutationObserver(() => {
+      const rendered = findResult(results, key)
+      if (!rendered) return
+      observer.disconnect()
+      if (reveal) rendered.scrollIntoView({block: 'nearest'})
+      update(rendered)
+    })
+    observer.observe(results, {childList: true, subtree: true})
+    return () => observer.disconnect()
+  }, [explorer.resultsId, isCombobox, items, page, selectedEntry, showsResults])
+
+  function onSearchChange(value: string) {
+    setInputValue(value)
+    startTransition(() => {
+      setSearch(value)
+    })
+  }
+
+  function selectedIndex() {
+    if (!selectedEntry) return -1
+    return items.findIndex(item => item.id === selectedEntry.id)
+  }
+
+  function moveSelection(direction: 1 | -1) {
+    if (items.length === 0) return
+    const current = selectedIndex()
+    const next =
+      current === -1
+        ? direction === 1
+          ? 0
+          : items.length - 1
+        : Math.max(0, Math.min(items.length - 1, current + direction))
+    revealActive.current = true
+    selectEntry(items[next])
+  }
+
+  function onSearchKeyDown(event: KeyboardEvent) {
+    if (event.key === 'Escape' && onEscape) {
+      event.preventDefault()
+      onEscape()
+    } else if (!isCombobox && explorer.selectionMode !== 'single') {
+      // A selection of many entries is kept, the keys stay in the field
+      return
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      moveSelection(1)
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      moveSelection(-1)
+    } else if (event.key === 'Enter') {
+      const entry =
+        selectedEntry ?? (explorer.autoSelectFirstItem ? items[0] : undefined)
+      if (!entry) return
+      event.preventDefault()
+      if (onEntryAction) onEntryAction(entry)
+      else performAction(entry, page.locale)
+    }
+  }
+
+  return (
+    <SearchField
+      id={inputId}
+      aria-label="Search"
+      className={styles.Explorer.search()}
+      icon={IcRoundSearch}
+      loading={isPending || inputValue !== page.search}
+      placeholder="Search..."
+      variant={boxed ? 'default' : 'inline'}
+      value={inputValue}
+      onValueChange={onSearchChange}
+      onKeyDown={onSearchKeyDown}
+      {...(isCombobox && {
+        role: 'combobox' as const,
+        'aria-autocomplete': 'list' as const,
+        'aria-haspopup': 'grid' as const,
+        'aria-controls': combobox.controls,
+        'aria-expanded': showsResults,
+        'aria-activedescendant': combobox.active
+      })}
+    />
+  )
+}
+
+interface ExplorerSearchScopeProps {
+  explorer: DashboardExplorer
+  page: ExplorerReadyPage
+}
+
+function ExplorerSearchScope({explorer, page}: ExplorerSearchScopeProps) {
+  const searchScope = page.searchScope
+  const setSearchScope = useSetAtom(explorer.searchScope)
+  const resultMode = page.resultMode
+  const canSearchEverything = useAtomValueRaw(explorer.canSearchEverything)
+  const [, startTransition] = useTransition()
+  if (!explorer.allowAllWorkspaces) return null
+  const isDisabled =
+    !canSearchEverything ||
+    (explorer.mode !== 'search' && resultMode !== 'matches')
+  return (
+    <Switch
+      className={styles.Explorer.searchScope()}
+      disabled={isDisabled}
+      checked={searchScope === 'everything'}
+      onCheckedChange={selected =>
+        startTransition(() =>
+          setSearchScope(selected ? 'everything' : explorer.rootScope)
+        )
+      }
+    >
+      All locations
+    </Switch>
+  )
+}
+
+interface ExplorerResultModeProps {
+  explorer: DashboardExplorer
+  page: ExplorerReadyPage
+}
+
+/** Switches between browsing folders and the matches below the location */
+function ExplorerResultMode({explorer, page}: ExplorerResultModeProps) {
+  const setResultMode = useSetAtom(explorer.resultMode)
+  const [, startTransition] = useTransition()
+  const searching = Boolean(page.search.trim())
+  const canBrowse = explorer.canBrowse && !searching
+  const canFilter = explorer.hasCondition || explorer.pickChildren || searching
+  // A toggle with a single mode to pick does nothing
+  if (!canBrowse || !canFilter) return null
+  return (
+    <ToggleGroup
+      type="single"
+      aria-label="Explorer results"
+      className={styles.Explorer.resultMode()}
+      value={page.resultMode}
+      variant="outline"
+      size="sm"
+      onValueChange={value => {
+        if (value !== 'browse' && value !== 'matches') return
+        startTransition(() => setResultMode(value))
+      }}
+    >
+      <ToggleGroupItem value="browse" icon={IcRoundAccountTree}>
+        Browse
+      </ToggleGroupItem>
+      <ToggleGroupItem value="matches" icon={IcRoundFilterList}>
+        Filtered
+      </ToggleGroupItem>
+    </ToggleGroup>
+  )
+}
+
+function ExplorerHeaderParentMain({
+  explorer,
+  parent: current,
+  titleControls
+}: ExplorerHeaderParentMainProps) {
+  return (
+    <div className={styles.ExplorerHeader.main()}>
+      <ExplorerParentBack explorer={explorer} parent={current} />
+      <PageTitle>{current.title}</PageTitle>
+      {titleControls}
+    </div>
+  )
+}
+
+function ExplorerHeaderMain({
+  explorer,
+  headerEntry,
+  page,
+  titleControls
+}: ExplorerHeaderMainProps) {
+  const {parent} = page
+  if (headerEntry) {
+    return (
+      <div className={styles.ExplorerHeader.main()}>
+        <PageBack
+          label={headerEntry.backLabel}
+          onClick={() => headerEntry.onBack()}
+        />
+        <PageTitle>{headerEntry.title}</PageTitle>
+        {titleControls}
+      </div>
+    )
+  }
+  if (parent) {
+    return (
+      <ExplorerHeaderParentMain
+        parent={parent}
+        explorer={explorer}
+        titleControls={titleControls}
+      />
+    )
+  }
+  if (titleControls) {
+    return <div className={styles.ExplorerHeader.main()}>{titleControls}</div>
+  }
+  return null
+}
+
+interface ExplorerLocaleProps {
+  explorer: DashboardExplorer
+  page: ExplorerReadyPage
+}
+
+/** The language of the listed root, when it has more than one */
+function ExplorerLocale({explorer, page}: ExplorerLocaleProps) {
+  const config = useAtomValueRaw(configAtom)
+  const setSelectedLocale = useSetAtom(explorer.selectedLocale)
+  const setLocation = useSetAtom(explorer.location)
+  const [, startTransition] = useTransition()
+  const {location} = page
+  const workspace = config.workspaces[location.workspace]
+  const root =
+    workspace && location.root
+      ? getWorkspace(workspace).roots[location.root]
+      : undefined
+  const locales = root ? (getRoot(root).i18n?.locales ?? []) : []
+  if (page.scope !== 'root' || locales.length < 2) return null
+  return (
+    <div className={styles.Explorer.locale()}>
+      {explorer.pickChildren ? (
+        <span className={styles.Explorer.locale.value()}>
+          {page.locale?.toUpperCase()}
+        </span>
+      ) : (
+        <LocaleMenuSelect
+          size="lg"
+          locales={locales}
+          locale={page.locale}
+          onLocaleChange={locale =>
+            startTransition(() => {
+              setSelectedLocale(locale)
+              setLocation(current => ({...current, locale}))
+            })
+          }
+        />
+      )}
+    </div>
+  )
+}
+
+interface ExplorerToolbarProps {
+  explorer: DashboardExplorer
+  page: ExplorerReadyPage
+}
+interface ExplorerActionsProps {
+  page: ExplorerReadyPage
+}
+
+/** The actions configured with `overview.actions` */
+function ExplorerActions({page}: ExplorerActionsProps) {
+  const views = useAtomValueRaw(viewsAtom)
+  const {location, overview} = page
+  if (overview.actions.length === 0 || !location.root) return null
+  const props: OverviewActionProps = {
+    workspace: location.workspace,
+    root: location.root,
+    parentId: location.parentId ?? null,
+    locale: page.locale,
+    search: page.search,
+    sort: page.sort.requested,
+    query: page.query
+  }
+  return (
+    <div className={styles.Explorer.actions()} data-slot="explorer-actions">
+      {overview.actions.map((view, index) => {
+        const Action = resolveView<OverviewActionProps>(views, view)
+        return Action ? <Action key={index} {...props} /> : null
+      })}
+    </div>
+  )
+}
+
+function ExplorerToolbar({explorer, page}: ExplorerToolbarProps) {
+  const setView = useSetAtom(explorer.view)
+  const setSort = useSetAtom(explorer.requestedSort)
+  const toggleFilter = useSetAtom(explorer.toggleFilter)
+  const clearFilters = useSetAtom(explorer.clearFilters)
+  const [, startTransition] = useTransition()
+  const requestedLocation = useAtomValueRaw(explorer.location)
+  const selectedLocale = useAtomValueRaw(explorer.selectedLocale)
+  const locationIsPending = explorerPageIsPending(
+    page,
+    requestedLocation,
+    selectedLocale
+  )
+  const uploads = useAtomValueRaw(explorer.uploadsInCurrentFolder)
+  const upload = useSetAtom(explorer.upload)
+  const uploadCount = uploads.length
+  const uploadLabel =
+    uploadCount === 1 ? '1 file uploading' : `${uploadCount} files uploading`
+
+  return (
+    <div className={styles.Explorer.toolbar.tools()}>
+      {page.uploadTypes.length > 0 && uploadCount > 0 && (
+        <ActivityStatus ariaLabel={uploadLabel} side="bottom">
+          {uploadCount}
+        </ActivityStatus>
+      )}
+      <ExplorerActions page={page} />
+      <ExplorerControls
+        sorts={page.search.trim() ? [] : page.overview.sorts}
+        sort={page.sort.requested}
+        filters={page.overview.filters}
+        picked={page.filters}
+        onSort={sort => startTransition(() => setSort(sort))}
+        onToggleFilter={(filter, option) =>
+          startTransition(() => toggleFilter(filter, option))
+        }
+        onReset={() =>
+          startTransition(() => {
+            clearFilters()
+            setSort(undefined)
+          })
+        }
+      />
+      <div className={styles.Explorer.toolbar.mediaActions()}>
+        <ViewToggle view={page.view} setView={setView} />
+        {page.uploadTypes.length > 0 &&
+          page.canUpload &&
+          !locationIsPending && (
+            <FileTrigger multiple onSelect={files => upload(files)}>
+              <Button icon={IcRoundUploadFile} color="primary">
+                Upload media
+              </Button>
+            </FileTrigger>
+          )}
+      </div>
+    </div>
+  )
+}
+
+export function ExplorerHeader({
+  autoFocusSearch,
+  onSearchEscape,
+  controls,
+  explorer,
+  headerEntry,
+  navigate,
+  page,
+  readOnly,
+  titleControls
+}: ExplorerHeaderProps) {
+  return (
+    <PageHeader className={styles.ExplorerHeader({navigation: navigate})}>
+      <div className={styles.ExplorerHeader.content()}>
+        <div className={styles.ExplorerHeader.primary()}>
+          {!navigate && (
+            <ExplorerHeaderMain
+              explorer={explorer}
+              headerEntry={headerEntry}
+              page={page}
+              titleControls={titleControls}
+            />
+          )}
+          {readOnly && <ReadOnlyBadge />}
+          <div className={styles.Explorer.searchSlot()}>
+            <ExplorerSearch
+              autoFocus={autoFocusSearch}
+              boxed={navigate}
+              explorer={explorer}
+              onEscape={onSearchEscape}
+              page={page}
+            />
+            {navigate ? (
+              <ExplorerScope explorer={explorer} page={page} />
+            ) : (
+              <ExplorerSearchScope explorer={explorer} page={page} />
+            )}
+          </div>
+          <div className={styles.Explorer.toolbar()}>
+            <ExplorerToolbar explorer={explorer} page={page} />
+            {controls && (
+              <div className={styles.Explorer.toolbar.controls()}>
+                {controls}
+              </div>
+            )}
+          </div>
+        </div>
+        {navigate && (
+          <div
+            aria-label="Explorer location"
+            className={styles.ExplorerHeader.location()}
+            role="group"
+          >
+            <ExplorerResultMode explorer={explorer} page={page} />
+            <ExplorerLocale explorer={explorer} page={page} />
+            <ExplorerBreadcrumbs explorer={explorer} page={page} />
+          </div>
+        )}
+      </div>
+    </PageHeader>
+  )
+}
+
+interface ExplorerHeaderViewProps {
+  page: ExplorerReadyPage
+}
+
+/** The view configured with `overview.header`, above the listed entries */
+function ExplorerHeaderView({page}: ExplorerHeaderViewProps) {
+  const views = useAtomValueRaw(viewsAtom)
+  const {location, overview} = page
+  if (!overview.header || !location.root) return null
+  const Header = resolveView<OverviewHeaderProps>(views, overview.header)
+  if (!Header) return null
+  return (
+    <ExplorerOverviewHeader>
+      <Header
+        workspace={location.workspace}
+        root={location.root}
+        parentId={location.parentId ?? null}
+        locale={page.locale}
+        search={page.search}
+        filter={page.filter}
+        query={page.query}
+      />
+    </ExplorerOverviewHeader>
+  )
+}
+
+export function ExplorerBody({
+  compactTable,
+  explorer,
+  onPick,
+  page,
+  children
+}: ExplorerBodyProps) {
+  const setTab = useSetAtom(explorer.requestedTab)
+  const [, startTransition] = useTransition()
+  const {tabs} = page.overview
+  const body = (
+    <>
+      <ExplorerHeaderView page={page} />
+      <div className={styles.Explorer.viewport()}>
+        <ExplorerList
+          compactTable={compactTable}
+          explorer={explorer}
+          onPick={onPick}
+          page={page}
+        />
+        {children}
+      </div>
+    </>
+  )
+  return (
+    <PageContent>
+      {page.tab ? (
+        <ExplorerTabs
+          tabs={tabs}
+          value={page.tab}
+          onValueChange={tab =>
+            // The first tab is the default, it keeps the url short
+            startTransition(() => setTab(tab === tabs[0].key ? undefined : tab))
+          }
+        >
+          {body}
+        </ExplorerTabs>
+      ) : (
+        body
+      )}
+    </PageContent>
+  )
+}
+
+export function Explorer({
+  controls,
+  explorer,
+  headerEntry,
+  page: loadedPage,
+  readOnly,
+  titleControls
+}: ExplorerProps) {
+  const resolvedPage = useAtomValueRawSync(explorer.page)
+  // The explorer shows its own updates, such as a new search, but keeps the
+  // locale of the page until the page of another locale replaces it
+  const page =
+    resolvedPage?.locale === loadedPage.locale ? resolvedPage : loadedPage
+  return (
+    <>
+      <ExplorerHeader
+        controls={controls}
+        explorer={explorer}
+        headerEntry={headerEntry}
+        page={page}
+        readOnly={readOnly ?? (page.isMedia && !page.canUpload)}
+        titleControls={titleControls}
+      />
+      <ExplorerBody explorer={explorer} page={page}>
+        {explorer.hasRowAction && explorer.selectionMode === 'multiple' && (
+          <ExplorerBatchActions explorer={explorer} />
+        )}
+      </ExplorerBody>
+    </>
+  )
+}

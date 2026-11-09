@@ -1,0 +1,8 @@
+.DashboardLayout-create {
+  width: 100%;
+  justify-content: center;
+
+  &.is-toolbar {
+    width: auto;
+  }
+}

@@ -1,0 +1,79 @@
+{
+  "_id": "3JmLPWTMiiUdkYuykdHt105r5tN",
+  "_type": "Doc",
+  "_index": "aX",
+  "title": "MultipleSelect",
+  "navigationTitle": "",
+  "body": [
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Picks several values, shown as tags in the field."
+        }
+      ]
+    },
+    {
+      "_type": "ComponentExampleBlock",
+      "_id": "3JmLPWWRmcC5bTcFusKvMFboXv4",
+      "example": "MultipleSelect"
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Values"
+        }
+      ],
+      "_anchor": "values"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "The value is an array of the `value`s of the picked items, strings or numbers. With a `name` the field submits one form entry per value, like a native multiple select: read them with `formData.getAll(name)`."
+        }
+      ]
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Props"
+        }
+      ],
+      "_anchor": "props"
+    },
+    {
+      "_type": "ComponentPropsBlock",
+      "_id": "3JmLPSjLKtrO6BsWDXKpvY0Xmql",
+      "component": "MultipleSelect"
+    }
+  ],
+  "metadata": {
+    "title": "",
+    "description": "",
+    "aliases": [],
+    "openGraph": {
+      "image": null,
+      "title": "",
+      "description": ""
+    },
+    "createdAt": 1790261271,
+    "createdBy": {
+      "name": "Ben Merckx",
+      "email": "ben@codeurs.be"
+    },
+    "updatedAt": 1790261271,
+    "updatedBy": {
+      "name": "Ben Merckx",
+      "email": "ben@codeurs.be"
+    }
+  }
+}

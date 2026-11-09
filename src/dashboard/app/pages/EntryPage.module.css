@@ -1,0 +1,94 @@
+/* The height of the entry header, custom field views fill the editor with
+   eg. `height: calc(100dvh - var(--alinea-header-height))` */
+.EntryEditor {
+  --alinea-header-height: 48px;
+}
+
+.EntryEditor-body {
+  min-height: 0;
+  min-width: 0;
+  padding: 16px;
+  background: var(--alinea-bg-muted);
+}
+
+.EntryEditor-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.EntryEditor-banner {
+  background: var(--alinea-bg-muted);
+}
+
+.EntryEditor-viewBanner {
+  flex-shrink: 0;
+  padding: 16px 16px 0;
+}
+
+.EntryEditor-view {
+  min-width: 0;
+  min-height: 0;
+}
+
+.EntryEditor-toolbar {
+  z-index: 1;
+  overflow: hidden;
+  border-top: 1px solid var(--alinea-border);
+
+  &:empty {
+    display: none;
+  }
+}
+
+.EntryEditorContent-navigationActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.EntryOverview-mobileActions {
+  display: none;
+}
+
+.MissingEntry {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.MissingEntry-media {
+  border-color: transparent;
+  border-radius: 999px;
+  background: var(--alinea-warning-subtle);
+  color: var(--alinea-warning-subtle-fg);
+}
+
+@media (max-width: 768px) {
+  .EntryOverview-mobileActions {
+    display: flex;
+  }
+
+  .EntryEditor-body {
+    padding: 8px;
+  }
+
+  .EntryEditor-viewBanner {
+    padding: 8px 8px 0;
+  }
+
+  .MissingEntry {
+    padding: 12px;
+  }
+}
+
+.EntryEditorLayout-sidebar {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}

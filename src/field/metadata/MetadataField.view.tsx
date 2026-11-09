@@ -1,0 +1,211 @@
+import {Button, Field, Surface, SurfaceContent, Text} from '#/components.js'
+import {PreviewMetadata} from '#/core/Preview.js'
+import {Section} from '#/core/Section.js'
+import {NodeEditor} from '#/dashboard/app/NodeEditor.js'
+import {
+  useFieldError,
+  useFieldNode,
+  useFieldOptions,
+  useFieldValue,
+  usePreviewMetadata
+} from '#/dashboard/hooks.js'
+import {IcRoundPublic} from '#/dashboard/icons.js'
+import {
+  MetadataDetailsSection,
+  MetadataField,
+  MetadataTimestampField,
+  MetadataUserField
+} from '#/field/metadata.js'
+import styler from '@alinea/styler'
+import css from './MetadataField.module.css'
+
+const styles = styler(css)
+
+export interface MetadataFieldViewProps {
+  field: MetadataField
+}
+
+export interface MetadataTimestampFieldViewProps {
+  field: MetadataTimestampField
+}
+
+export function MetadataTimestampFieldView({
+  field
+}: MetadataTimestampFieldViewProps) {
+  const value = useFieldValue(field)
+  const options = useFieldOptions(field)
+  const error = useFieldError(field)
+  const displayValue = formatAuditTimestamp(value)
+  return (
+    <Field label={options.label} error={error} shared={options.shared}>
+      <div className={styles.MetadataTimestampFieldView()}>
+        {displayValue || 'Not available'}
+      </div>
+    </Field>
+  )
+}
+
+export interface MetadataUserFieldViewProps {
+  field: MetadataUserField
+}
+
+export function MetadataUserFieldView({field}: MetadataUserFieldViewProps) {
+  const value = useFieldValue(field)
+  const options = useFieldOptions(field)
+  const error = useFieldError(field)
+  const email = value?.email
+  const name = value?.name || (email ? 'Unknown user' : 'Not available')
+  return (
+    <Field label={options.label} error={error} shared={options.shared}>
+      <div className={styles.MetadataUserFieldView()}>
+        <div className={styles.MetadataUserFieldView.person()}>{name}</div>
+        {email && (
+          <div className={styles.MetadataUserFieldView.contact()}>
+            &lt;{email}&gt;
+          </div>
+        )}
+      </div>
+    </Field>
+  )
+}
+
+export function MetadataFieldView({field}: MetadataFieldViewProps) {
+  const options = useFieldOptions(field)
+  const node = useFieldNode<object>(field)
+  return (
+    <>
+      <NodeEditor
+        node={node}
+        readOnly={options.readOnly}
+        type={options.sections ? options.seo : options.fields}
+      />
+      {!options.sections && <MetadataPreviewsView />}
+    </>
+  )
+}
+
+export function MetadataPreviewsView() {
+  const metadata = usePreviewMetadata()
+  return <MetadataPreview metadata={metadata} origin={origin} />
+}
+
+export interface MetadataDetailsViewProps {
+  section: Section
+}
+
+export function MetadataDetailsView({section}: MetadataDetailsViewProps) {
+  const {field} = section[Section.Data] as MetadataDetailsSection
+  const options = useFieldOptions(field)
+  const node = useFieldNode<object>(field)
+  return (
+    <NodeEditor
+      node={node}
+      readOnly={options.readOnly}
+      type={options.details}
+    />
+  )
+}
+
+function formatAuditTimestamp(value: number | string | null): string {
+  if (value === null || value === undefined) return ''
+  const date = new Date(typeof value === 'number' ? value * 1000 : value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZoneName: 'short'
+  }).format(date)
+}
+
+interface MetadataPreviewProps {
+  metadata?: PreviewMetadata | undefined
+  origin?: string | undefined
+}
+function MetadataPreview({metadata, origin}: MetadataPreviewProps) {
+  if (!metadata)
+    return (
+      <Field label="Metadata previews" style={{marginTop: '32px'}}>
+        <Text as="p" color="muted">
+          Open preview mode to display a metadata preview
+        </Text>
+      </Field>
+    )
+  return (
+    <Field label="Metadata previews" style={{marginTop: '32px'}}>
+      <SearchEnginePreview metadata={metadata} origin={origin} />
+      <OpenGraphPreview metadata={metadata} origin={origin} />
+    </Field>
+  )
+}
+
+interface MetadataProps {
+  metadata: PreviewMetadata
+  origin?: string | undefined
+}
+
+function OpenGraphPreview({metadata, origin}: MetadataProps) {
+  return (
+    <Field label="Open Graph Preview (Social Share)">
+      <Surface className={styles.OpenGraphPreview()}>
+        <div className={styles.OpenGraphPreview.image()}>
+          {metadata['og:image'] ? (
+            <img src={metadata['og:image']} alt="" />
+          ) : (
+            <span>No image</span>
+          )}
+        </div>
+        <SurfaceContent className={styles.OpenGraphPreview.content()}>
+          <div className={styles.OpenGraphPreview.site()}>
+            {origin || metadata['og:site_name']}
+          </div>
+          <h3 className={styles.OpenGraphPreview.title()}>
+            {metadata['og:title']}
+          </h3>
+          {/* {metadata['og:description'] && (
+            <p className={styles.OpenGraphPreview.description()}>
+              {metadata['og:description']}
+            </p>
+          )} */}
+        </SurfaceContent>
+      </Surface>
+    </Field>
+  )
+}
+
+function SearchEnginePreview({metadata, origin}: MetadataProps) {
+  const fullUrl =
+    origin && metadata['og:url']
+      ? new URL(metadata['og:url'], origin).toString()
+      : metadata['og:url']
+
+  return (
+    <Field
+      label="Search Engine Preview"
+      className={styles.SearchEnginePreview()}
+    >
+      <Surface>
+        <SurfaceContent style={{gap: '0'}}>
+          <div className={styles.SearchEnginePreview.og()}>
+            <Button size="icon" icon={IcRoundPublic} />
+            <div className={styles.SearchEnginePreview.og.label()}>
+              <span>{metadata['og:site_name']}</span>
+              <span className={styles.SearchEnginePreview.og.label.small()}>
+                {fullUrl}
+              </span>
+            </div>
+          </div>
+          <h3 className={styles.SearchEnginePreview.link()}>
+            {metadata['title']}
+          </h3>
+          <p className={styles.SearchEnginePreview.description()}>
+            {metadata['description']}
+          </p>
+        </SurfaceContent>
+      </Surface>
+    </Field>
+  )
+}

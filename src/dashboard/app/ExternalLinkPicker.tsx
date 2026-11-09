@@ -1,0 +1,118 @@
+import {Button, Checkbox, Field, TextField, useDialog} from '#/components.js'
+import {useState, type FormEvent} from 'react'
+import {
+  DashboardModal,
+  DashboardModalCloseButton,
+  DashboardModalDialog,
+  DashboardModalForm,
+  DashboardModalFormBody,
+  DashboardModalFormFooter,
+  DashboardModalFormHeader,
+  DashboardModalTitle
+} from './ui/DashboardModal.js'
+
+export interface ExternalLinkValue {
+  url: string
+  title: string
+  target: string
+}
+
+export interface ExternalLinkPickerProps {
+  initialValue?: ExternalLinkValue
+  selectionMode: 'single' | 'multiple'
+  submitLabel?: string
+  onConfirm: (value: ExternalLinkValue) => void
+}
+
+export function ExternalLinkPicker({
+  initialValue,
+  selectionMode,
+  submitLabel,
+  onConfirm
+}: ExternalLinkPickerProps) {
+  return (
+    <DashboardModal
+      aria-label={
+        selectionMode === 'multiple' ? 'External links' : 'External link'
+      }
+    >
+      <ExternalLinkPickerDialog
+        initialValue={initialValue}
+        selectionMode={selectionMode}
+        submitLabel={submitLabel}
+        onConfirm={onConfirm}
+      />
+    </DashboardModal>
+  )
+}
+
+function ExternalLinkPickerDialog({
+  initialValue,
+  selectionMode,
+  submitLabel,
+  onConfirm
+}: ExternalLinkPickerProps) {
+  const modal = useDialog()
+  const initialUrl = initialValue?.url ?? ''
+  const initialTitle = initialValue?.title ?? ''
+  const [url, setUrl] = useState(initialUrl)
+  const parsedUrl = url.trim() ? URL.parse(url, 'https://example.com') : null
+  const urlError =
+    url && !parsedUrl
+      ? 'Enter a valid URL, for example https://example.com'
+      : undefined
+  const [title, setTitle] = useState(initialTitle)
+  const [openInNewTab, setOpenInNewTab] = useState(
+    initialValue?.target !== '_self'
+  )
+
+  function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!parsedUrl) return
+    onConfirm({
+      url,
+      title,
+      target: openInNewTab ? '_blank' : '_self'
+    })
+    modal.close()
+  }
+
+  return (
+    <DashboardModalDialog variant="explorer">
+      <DashboardModalForm onSubmit={onSubmit}>
+        <DashboardModalFormHeader>
+          <DashboardModalTitle>
+            {selectionMode === 'multiple' ? 'External links' : 'External link'}
+          </DashboardModalTitle>
+          <DashboardModalCloseButton />
+        </DashboardModalFormHeader>
+        <DashboardModalFormBody>
+          <TextField
+            label="URL"
+            value={url}
+            onValueChange={setUrl}
+            error={urlError}
+            required
+          />
+          <TextField
+            label="Label"
+            value={title}
+            onValueChange={setTitle}
+            required
+          />
+          <Field label="Target">
+            <Checkbox checked={openInNewTab} onCheckedChange={setOpenInNewTab}>
+              Open link in new tab
+            </Checkbox>
+          </Field>
+        </DashboardModalFormBody>
+        <DashboardModalFormFooter>
+          <Button type="submit" color="primary">
+            {submitLabel ?? 'Add link'}
+          </Button>
+        </DashboardModalFormFooter>
+      </DashboardModalForm>
+    </DashboardModalDialog>
+  )
+}

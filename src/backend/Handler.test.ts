@@ -1,0 +1,1914 @@
+import {BasicAuth} from '#/backend/api/BasicAuth.js'
+import {composeBackend} from '#/backend/api/CreateBackend.js'
+import {MissingCredentialsError} from '#/backend/Auth.js'
+import {type AfterCommitContext, createHandler} from '#/backend/Handler.js'
+import {syncWait} from '#/backend/util/Syncable.js'
+import {AuthResultType} from '#/cloud/AuthResult.js'
+import {decodeBlobSequence} from '#/core/BlobTransport.js'
+import {createCMS} from '#/core.js'
+import type {
+  AuthOptions,
+  AuthedContext,
+  RequestContext,
+  Revision
+} from '#/core/Connection.js'
+import {LocalDB} from '#/database/LocalDB.js'
+import {Entry} from '#/core/Entry.js'
+import {MediaFile, MediaLibrary} from '#/core/media/MediaTypes.js'
+import {role} from '#/core/Role.js'
+import type {User} from '#/core/User.js'
+import {Config, Field} from '#/index.js'
+import {suite} from '@alinea/suite'
+import {jest} from 'bun:test'
+
+const test = suite(import.meta)
+
+const Page = Config.document('Page', {
+  fields: {}
+})
+
+const main = Config.workspace('Main', {
+  source: 'content',
+  roots: {
+    pages: Config.root('Pages')
+  }
+})
+
+test('requires member management capability for user management', async () => {
+  const cms = createCMS({
+    schema: {Page},
+    workspaces: {main},
+    roles: {
+      editor: role('Editor', {
+        permissions() {}
+      }),
+      owner: role('Owner', {
+        permissions(policy) {
+          policy.set({
+            allow: {
+              manageMembers: true
+            }
+          })
+        }
+      })
+    }
+  })
+  const db = new LocalDB(cms.config)
+  let userRoles = ['editor']
+  let listCalls = 0
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend({
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {
+              email: 'ada@example.com',
+              roles: userRoles,
+              sub: 'ada@example.com'
+            }
+          }
+        },
+        async enrichUser(user: User): Promise<User> {
+          return user
+        },
+        async listUsers(): Promise<Array<User>> {
+          listCalls += 1
+          return []
+        }
+      })
+    }
+  })
+
+  const denied = await handle(userRequest('list'), requestContext())
+  test.is(denied.status, 401)
+  test.is(listCalls, 0)
+
+  userRoles = ['owner']
+  const allowed = await handle(userRequest('list'), requestContext())
+  test.is(allowed.status, 200)
+  test.is(listCalls, 1)
+})
+
+test('reports missing user api capability without listUsers', async () => {
+  const cms = createCMS({
+    schema: {Page},
+    workspaces: {main}
+  })
+  const db = new LocalDB(cms.config)
+  const handle = createHandler({
+    cms,
+    db,
+    remote() {
+      return composeBackend({})
+    }
+  })
+
+  const response = await handle(capabilitiesRequest(), requestContext())
+  test.is(response.status, 200)
+  test.equal(await response.json(), {
+    users: false
+  })
+})
+
+test('reports user api capability when listUsers exists', async () => {
+  const cms = createCMS({
+    schema: {Page},
+    workspaces: {main}
+  })
+  const db = new LocalDB(cms.config)
+  const handle = createHandler({
+    cms,
+    db,
+    remote() {
+      return composeBackend({
+        async listUsers(): Promise<Array<User>> {
+          return []
+        }
+      })
+    }
+  })
+
+  const response = await handle(capabilitiesRequest(), requestContext())
+  test.is(response.status, 200)
+  test.equal(await response.json(), {
+    users: true
+  })
+})
+
+test('uses the global sync interval unless overridden or disabled', async () => {
+  const cms = createCMS({
+    schema: {Page},
+    workspaces: {main},
+    syncInterval: 0
+  })
+  const db = new LocalDB(cms.config)
+  const syncWith = db.syncWith.bind(db)
+  let syncCalls = 0
+  db.syncWith = remote => {
+    syncCalls += 1
+    return syncWith(remote)
+  }
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(db, {
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        }
+      })
+    }
+  })
+
+  const globallyConfigured = await handle(resolveRequest({}), requestContext())
+  test.is(globallyConfigured.status, 200)
+  test.is(syncCalls, 1)
+
+  const overridden = await handle(
+    resolveRequest({syncInterval: 3600}),
+    requestContext()
+  )
+  test.is(overridden.status, 200)
+  test.is(syncCalls, 1)
+
+  const disabled = await handle(
+    resolveRequest({disableSync: true, syncInterval: 0}),
+    requestContext()
+  )
+  test.is(disabled.status, 200)
+  test.is(syncCalls, 1)
+})
+
+test('allows production route syncs authenticated with the release key', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const db = new LocalDB(cms.config)
+  const handle = createHandler({
+    cms,
+    db,
+    remote() {
+      return composeBackend(db, {
+        async verify(): Promise<AuthedContext> {
+          throw new MissingCredentialsError('Missing user credentials')
+        }
+      })
+    }
+  })
+  const context = {...requestContext(), isDev: false}
+  const request = resolveRequest({})
+  request.headers.set('authorization', 'Bearer test')
+
+  const response = await handle(request, context)
+
+  test.is(response.status, 200)
+})
+
+test('includes capabilities with the enriched auth status user', async () => {
+  const cms = createCMS({
+    schema: {Page},
+    workspaces: {main}
+  })
+  const db = new LocalDB(cms.config)
+  const handle = createHandler({
+    cms,
+    db,
+    remote() {
+      return composeBackend({
+        async authenticate(
+          _request: Request,
+          options: AuthOptions
+        ): Promise<Response> {
+          const user = {
+            email: 'ada@example.com',
+            roles: [],
+            sub: 'ada@example.com'
+          }
+          return Response.json({
+            type: AuthResultType.Authenticated,
+            ...(await options.authenticated(user))
+          })
+        },
+        async enrichUser(user: User): Promise<User> {
+          return {...user, roles: ['admin']}
+        }
+      })
+    }
+  })
+
+  const response = await handle(authStatusRequest(), requestContext())
+
+  test.is(response.status, 200)
+  test.equal(await response.json(), {
+    type: AuthResultType.Authenticated,
+    capabilities: {users: false},
+    user: {
+      email: 'ada@example.com',
+      roles: ['admin'],
+      sub: 'ada@example.com'
+    }
+  })
+})
+
+test('reports capability failures as server errors during auth', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const db = new LocalDB(cms.config)
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(
+        new BasicAuth(context, () => ({
+          email: 'ada@example.com',
+          roles: ['admin'],
+          sub: 'ada@example.com'
+        })),
+        {
+          async capabilities() {
+            throw new Error('Capabilities unavailable')
+          }
+        }
+      )
+    }
+  })
+  const request = authStatusRequest()
+  request.headers.set('authorization', 'Basic YWRhOnRlc3Q=')
+
+  const response = await handle(request, requestContext())
+
+  test.is(response.status, 500)
+  test.equal(await response.json(), {
+    success: false,
+    error: 'Failed to complete authentication'
+  })
+})
+
+test('adds enriched user to commit requests', async () => {
+  const cms = createCMS({
+    schema: {Page},
+    workspaces: {main}
+  })
+  const db = new LocalDB(cms.config)
+  let commitUser: User | undefined
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend({
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {
+              email: 'ada@example.com',
+              roles: ['admin'],
+              sub: 'ada@example.com'
+            }
+          }
+        },
+        async enrichUser(user: User): Promise<User> {
+          return {...user, name: 'Ada Lovelace'}
+        },
+        async getTreeIfDifferent() {
+          return undefined
+        },
+        async *getBlobs() {},
+        async write(request) {
+          commitUser = request.user
+          return {sha: request.intoSha}
+        }
+      })
+    }
+  })
+
+  const response = await handle(
+    new Request('http://localhost/api?action=mutate', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify([])
+    }),
+    requestContext()
+  )
+
+  test.is(response.status, 200)
+  test.equal(commitUser, {
+    email: 'ada@example.com',
+    name: 'Ada Lovelace',
+    roles: ['admin'],
+    sub: 'ada@example.com'
+  })
+})
+
+test('forwards authenticated mutations before handling them locally', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const db = new LocalDB(cms.config)
+  let beforeCommitCalls = 0
+  let forwardedUser: User | undefined
+  let forwardedMutations: unknown
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend({
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test-token',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        },
+        async enrichUser(user: User): Promise<User> {
+          return {...user, name: 'Admin'}
+        }
+      })
+    },
+    async forwardMutations(request, context) {
+      forwardedUser = context.user
+      forwardedMutations = await request.json()
+      return Response.json({sha: 'forwarded'})
+    },
+    beforeCommit() {
+      beforeCommitCalls += 1
+    }
+  })
+  const mutations = [
+    {
+      op: 'create',
+      id: 'forwarded-entry',
+      type: 'Page',
+      locale: null,
+      data: {title: 'Forwarded'}
+    }
+  ]
+
+  const response = await handle(mutationRequest(mutations), requestContext())
+
+  test.is(response.status, 200)
+  test.equal(await response.json(), {sha: 'forwarded'})
+  test.equal(forwardedMutations, mutations)
+  test.equal(forwardedUser, {
+    name: 'Admin',
+    roles: ['admin'],
+    sub: 'admin'
+  })
+  test.is(beforeCommitCalls, 0)
+  test.not.ok(await db.first({id: 'forwarded-entry', status: 'all'}))
+})
+
+test('handles a mutation locally when forwarding declines after reading it', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const db = new LocalDB(cms.config)
+  let forwardedMutations: unknown
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(db, {
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        }
+      })
+    },
+    async forwardMutations(request) {
+      forwardedMutations = await request.json()
+      return undefined
+    }
+  })
+  const mutations = [
+    {
+      op: 'create',
+      id: 'local-entry',
+      type: 'Page',
+      locale: null,
+      data: {title: 'Local'}
+    }
+  ]
+
+  const response = await handle(mutationRequest(mutations), requestContext())
+
+  test.is(response.status, 200)
+  test.equal(forwardedMutations, mutations)
+  test.ok(await db.first({id: 'local-entry', status: 'all'}))
+})
+
+test('runs commit hooks around a successful commit', async () => {
+  const cms = createCMS({
+    schema: {Page},
+    workspaces: {main}
+  })
+  const db = new LocalDB(cms.config)
+  const calls: Array<string> = []
+  const committedShas: Array<string> = []
+  const users = new Set<string>()
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(db, {
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        }
+      })
+    },
+    beforeCommit({mutations, user}) {
+      calls.push(`beforeCommit:${mutations.map(({op}) => op).join(',')}`)
+      users.add(user.sub)
+    },
+    afterCommit({mutations, sha, user}) {
+      calls.push(`afterCommit:${mutations.map(({op}) => op).join(',')}`)
+      committedShas.push(sha)
+      users.add(user.sub)
+    }
+  })
+
+  const createResponse = await handle(
+    mutationRequest([
+      {
+        op: 'create',
+        id: 'hook-entry',
+        type: 'Page',
+        locale: null,
+        data: {title: 'Original'}
+      }
+    ]),
+    requestContext()
+  )
+  test.is(createResponse.status, 200)
+  const createResult = (await createResponse.json()) as {sha: string}
+
+  const updateResponse = await handle(
+    mutationRequest([
+      {
+        op: 'update',
+        id: 'hook-entry',
+        locale: null,
+        status: 'published',
+        set: {title: 'Requested update'}
+      }
+    ]),
+    requestContext()
+  )
+  test.is(updateResponse.status, 200)
+  const updateResult = (await updateResponse.json()) as {sha: string}
+
+  const archiveResponse = await handle(
+    mutationRequest([{op: 'archive', id: 'hook-entry', locale: null}]),
+    requestContext()
+  )
+  test.is(archiveResponse.status, 200)
+  const archiveResult = (await archiveResponse.json()) as {sha: string}
+
+  const removeResponse = await handle(
+    mutationRequest([{op: 'remove', id: 'hook-entry'}]),
+    requestContext()
+  )
+  test.is(removeResponse.status, 200)
+  const removeResult = (await removeResponse.json()) as {sha: string}
+
+  test.equal(calls, [
+    'beforeCommit:create',
+    'afterCommit:create',
+    'beforeCommit:update',
+    'afterCommit:update',
+    'beforeCommit:archive',
+    'afterCommit:archive',
+    'beforeCommit:remove',
+    'afterCommit:remove'
+  ])
+  test.equal(committedShas, [
+    createResult.sha,
+    updateResult.sha,
+    archiveResult.sha,
+    removeResult.sha
+  ])
+  test.equal([...users], ['admin'])
+})
+
+test('afterCommit receives the committed and removed entries', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const db = new LocalDB(cms.config)
+  const contexts: Array<AfterCommitContext> = []
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(db, {
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        }
+      })
+    },
+    afterCommit(context) {
+      contexts.push(context)
+    }
+  })
+  await handle(
+    mutationRequest([
+      {
+        op: 'create',
+        id: 'about',
+        type: 'Page',
+        locale: null,
+        data: {title: 'About', path: 'about'}
+      }
+    ]),
+    requestContext()
+  )
+  await handle(mutationRequest([{op: 'remove', id: 'about'}]), requestContext())
+  const [created, removed] = contexts
+  test.equal(
+    created.entries.map(({id, type, title, url, status, data}) => ({
+      id,
+      type,
+      title,
+      url,
+      status,
+      path: data.path
+    })),
+    [
+      {
+        id: 'about',
+        type: 'Page',
+        title: 'About',
+        url: '/about',
+        status: 'published',
+        path: 'about'
+      }
+    ]
+  )
+  test.equal(created.removed, [])
+  test.equal(removed.entries, [])
+  test.equal(removed.removed, [
+    {id: 'about', type: 'Page', locale: null, url: '/about'}
+  ])
+})
+
+test('runs commit hooks for publish, unpublish and move mutations', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const db = new LocalDB(cms.config)
+  const calls: Array<string> = []
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(db, {
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        }
+      })
+    },
+    beforeCommit({mutations}) {
+      calls.push(`before:${mutations.map(({op}) => op).join(',')}`)
+    },
+    afterCommit({mutations}) {
+      calls.push(`after:${mutations.map(({op}) => op).join(',')}`)
+    }
+  })
+
+  const setup = await handle(
+    mutationRequest([
+      {
+        op: 'create',
+        id: 'move-entry',
+        type: 'Page',
+        locale: null,
+        data: {title: 'Move entry'}
+      },
+      {
+        op: 'create',
+        id: 'move-target',
+        type: 'Page',
+        locale: null,
+        data: {title: 'Move target'}
+      },
+      {
+        op: 'create',
+        id: 'draft-entry',
+        type: 'Page',
+        locale: null,
+        status: 'draft',
+        data: {title: 'Draft entry'}
+      }
+    ]),
+    requestContext()
+  )
+  test.is(setup.status, 200)
+  calls.length = 0
+
+  const publish = await handle(
+    mutationRequest([
+      {op: 'publish', id: 'draft-entry', locale: null, status: 'draft'}
+    ]),
+    requestContext()
+  )
+  const unpublish = await handle(
+    mutationRequest([{op: 'unpublish', id: 'draft-entry', locale: null}]),
+    requestContext()
+  )
+  const move = await handle(
+    mutationRequest([
+      {
+        op: 'move',
+        id: 'move-entry',
+        target: 'move-target',
+        dropPosition: 'after'
+      }
+    ]),
+    requestContext()
+  )
+
+  test.is(publish.status, 200)
+  test.is(unpublish.status, 200)
+  test.is(move.status, 200)
+  test.equal(calls, [
+    'before:publish',
+    'after:publish',
+    'before:unpublish',
+    'after:unpublish',
+    'before:move',
+    'after:move'
+  ])
+})
+
+test('commits mutations returned by beforeCommit', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const db = new LocalDB(cms.config)
+  let committedTitle: unknown
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(db, {
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        }
+      })
+    },
+    beforeCommit({mutations}) {
+      return mutations.map(mutation =>
+        mutation.op === 'create'
+          ? {
+              ...mutation,
+              data: {...mutation.data, title: 'Adjusted by hook'}
+            }
+          : mutation
+      )
+    },
+    afterCommit({mutations}) {
+      const mutation = mutations[0]
+      if (mutation.op === 'create') committedTitle = mutation.data.title
+    }
+  })
+
+  const response = await handle(
+    mutationRequest([
+      {
+        op: 'create',
+        id: 'adjusted-entry',
+        type: 'Page',
+        locale: null,
+        data: {title: 'Original'}
+      }
+    ]),
+    requestContext()
+  )
+  const entry = await db.first({
+    id: 'adjusted-entry',
+    status: 'all',
+    select: {data: Entry.data}
+  })
+
+  test.is(response.status, 200)
+  test.is(entry?.data.title, 'Adjusted by hook')
+  test.is(committedTitle, 'Adjusted by hook')
+})
+
+test('rejects create mutations without an id', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const db = new LocalDB(cms.config)
+  let beforeCommitCalls = 0
+  let writes = 0
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(db, {
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        },
+        async write(request) {
+          writes += 1
+          return db.write(request)
+        }
+      })
+    },
+    beforeCommit({mutations}) {
+      beforeCommitCalls += 1
+      return mutations.map(mutation => {
+        if (mutation.op !== 'create') return mutation
+        const {id: _id, ...withoutId} = mutation
+        return withoutId
+      })
+    }
+  })
+  const error = console.error
+  console.error = () => {}
+  try {
+    const missingFromRequest = await handle(
+      mutationRequest([
+        {
+          op: 'create',
+          type: 'Page',
+          locale: null,
+          data: {title: 'Missing from request'}
+        }
+      ]),
+      requestContext()
+    )
+    const removedByHook = await handle(
+      mutationRequest([
+        {
+          op: 'create',
+          id: 'removed-by-hook',
+          type: 'Page',
+          locale: null,
+          data: {title: 'Removed by hook'}
+        }
+      ]),
+      requestContext()
+    )
+
+    test.is(missingFromRequest.status, 500)
+    test.is(removedByHook.status, 500)
+    test.is(beforeCommitCalls, 2)
+    test.is(writes, 0)
+  } finally {
+    console.error = error
+  }
+})
+
+test('publishes entries with invalid fields through the api', async () => {
+  const Article = Config.document('Article', {
+    fields: {
+      summary: Field.text('Summary', {required: true}),
+      code: Field.text('Code', {
+        validate: value => (value?.startsWith('A') ? true : 'Starts with A')
+      })
+    }
+  })
+  const cms = createCMS({
+    schema: {Article},
+    workspaces: {main},
+    enableDrafts: true
+  })
+  const db = new LocalDB(cms.config)
+  let writes = 0
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(db, {
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        },
+        async write(request) {
+          writes += 1
+          return db.write(request)
+        }
+      })
+    }
+  })
+  const create = (status: string, data: object) =>
+    handle(
+      mutationRequest([
+        {
+          op: 'create',
+          id: 'article',
+          type: 'Article',
+          locale: null,
+          status,
+          overwrite: true,
+          data: {title: 'Article', ...data}
+        }
+      ]),
+      requestContext()
+    )
+
+  // Validation warns editors in the dashboard, it doesn't block writes
+  const published = await create('published', {code: 'B'})
+  test.is(published.status, 200)
+  test.is(writes, 1)
+
+  const draft = await create('draft', {code: 'B'})
+  test.is(draft.status, 200)
+  const publish = await handle(
+    mutationRequest([
+      {op: 'publish', id: 'article', locale: null, status: 'draft'}
+    ]),
+    requestContext()
+  )
+  test.is(publish.status, 200)
+  test.is(writes, 3)
+})
+
+test('does not report a committed mutation as failed when afterCommit throws', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const db = new LocalDB(cms.config)
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(db, {
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        }
+      })
+    },
+    afterCommit() {
+      throw new Error('After hook failed')
+    }
+  })
+  const error = console.error
+  console.error = () => {}
+  try {
+    const response = await handle(
+      mutationRequest([
+        {
+          op: 'create',
+          id: 'committed-entry',
+          type: 'Page',
+          locale: null,
+          data: {title: 'Committed'}
+        }
+      ]),
+      requestContext()
+    )
+
+    test.is(response.status, 200)
+    test.ok(await db.first({id: 'committed-entry', status: 'all'}))
+  } finally {
+    console.error = error
+  }
+})
+
+test('does not commit when beforeCommit throws', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const db = new LocalDB(cms.config)
+  let writes = 0
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(db, {
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        },
+        async write(request) {
+          writes += 1
+          return db.write(request)
+        }
+      })
+    },
+    beforeCommit() {
+      throw new Error('Before hook failed')
+    }
+  })
+  const error = console.error
+  console.error = () => {}
+  try {
+    const response = await handle(
+      mutationRequest([
+        {
+          op: 'create',
+          id: 'rejected-entry',
+          type: 'Page',
+          locale: null,
+          data: {title: 'Rejected'}
+        }
+      ]),
+      requestContext()
+    )
+
+    test.is(response.status, 500)
+    test.is(writes, 0)
+    test.not.ok(await db.first({id: 'rejected-entry', status: 'all'}))
+  } finally {
+    console.error = error
+  }
+})
+
+test('retries a forwarded commit conflict by response status', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const db = new LocalDB(cms.config)
+  let writes = 0
+  let beforeCommits = 0
+  let afterCommits = 0
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(db, {
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        },
+        async write(request) {
+          writes += 1
+          if (writes === 1)
+            throw Response.json({error: 'Conflict'}, {status: 409})
+          return db.write(request)
+        }
+      })
+    },
+    beforeCommit() {
+      beforeCommits += 1
+    },
+    afterCommit() {
+      afterCommits += 1
+    }
+  })
+
+  const response = await handle(
+    mutationRequest([
+      {
+        op: 'create',
+        id: 'retry-entry',
+        type: 'Page',
+        locale: null,
+        data: {title: 'Retry'}
+      }
+    ]),
+    requestContext()
+  )
+
+  test.is(response.status, 200)
+  test.is(writes, 2)
+  test.is(beforeCommits, 1)
+  test.is(afterCommits, 1)
+})
+
+test('does not commit again when a sync moved past a landed commit', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const remoteDb = new LocalDB(cms.config)
+  const db = new LocalDB(cms.config)
+  let writes = 0
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(remoteDb, {
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        },
+        async write(request) {
+          writes += 1
+          const result = await remoteDb.write(request)
+          // Another commit lands and a read syncs both in before this
+          // commit is applied locally
+          await remoteDb.create({type: Page, set: {title: 'Other'}})
+          await db.syncWith(remoteDb)
+          return result
+        }
+      })
+    }
+  })
+
+  const response = await handle(
+    mutationRequest([
+      {
+        op: 'create',
+        id: 'landed-entry',
+        type: 'Page',
+        locale: null,
+        data: {title: 'Landed'}
+      }
+    ]),
+    requestContext()
+  )
+
+  test.is(response.status, 200)
+  test.is(writes, 1)
+  test.is(await db.sha, await remoteDb.sha)
+  const titles = await db.find({type: Page, select: Entry.title})
+  test.equal(titles.toSorted(), ['Landed', 'Other'])
+})
+
+test('serves the history of entries the user can read', async () => {
+  const cms = createCMS({
+    schema: {Page},
+    workspaces: {main},
+    roles: {
+      reader: role('Reader', {
+        permissions(policy) {
+          policy.set({allow: {read: true}})
+        }
+      }),
+      guest: role('Guest', {
+        permissions() {}
+      })
+    }
+  })
+  const db = new LocalDB(cms.config)
+  const about = await db.create({
+    type: Page,
+    workspace: 'main',
+    root: 'pages',
+    set: {title: 'About', path: 'about'}
+  })
+  const revisions: Array<Revision> = [
+    {ref: 'abc', createdAt: 0, file: 'content/pages/about.json'}
+  ]
+  const record = {_id: about._id, _type: 'Page', _index: 'a0', title: 'Old'}
+  const requested: Array<string> = []
+  let roles = ['reader']
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend({
+        async verify(): Promise<AuthedContext> {
+          return {...context, token: 'test', user: {roles, sub: 'ada'}}
+        },
+        async revisions(file) {
+          requested.push(file)
+          return revisions
+        },
+        async revisionData(file, ref) {
+          requested.push(`${ref}:${file}`)
+          return record
+        }
+      })
+    }
+  })
+  const history = (query: string) =>
+    handle(
+      new Request(`http://localhost/api?action=history&${query}`, {
+        headers: {accept: 'application/json'}
+      }),
+      requestContext()
+    )
+
+  const list = await history('file=content/pages/about.json')
+  test.is(list.status, 200)
+  test.equal(await list.json(), revisions)
+  // A revision can hold the entry under a name it had before
+  const renamed = await history('file=content/pages/old.json&revisionId=abc')
+  test.is(renamed.status, 200)
+  test.equal(await renamed.json(), record)
+
+  roles = ['guest']
+  test.is((await history('file=content/pages/about.json')).status, 401)
+  test.is(
+    (await history('file=content/pages/old.json&revisionId=abc')).status,
+    401
+  )
+  test.equal(requested, [
+    'content/pages/about.json',
+    'abc:content/pages/old.json',
+    'abc:content/pages/old.json'
+  ])
+})
+
+test('serves no history for files outside of entries', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const db = new LocalDB(cms.config)
+  const requested: Array<string> = []
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend({
+        async verify(): Promise<AuthedContext> {
+          return {...context, token: 'test', user: {roles: ['admin'], sub: 'a'}}
+        },
+        async revisions(file) {
+          requested.push(file)
+          return []
+        },
+        async revisionData(file) {
+          requested.push(file)
+          return {_id: 'x', _type: 'Page', _index: 'a0'}
+        }
+      })
+    }
+  })
+  const history = (query: string) =>
+    handle(
+      new Request(`http://localhost/api?action=history&${query}`, {
+        headers: {accept: 'application/json'}
+      }),
+      requestContext()
+    )
+  test.is((await history('file=content/pages/missing.json')).status, 404)
+  test.is((await history('file=package.json&revisionId=abc')).status, 404)
+  test.equal(requested, ['package.json'])
+})
+
+test('redirects an unbuilt nested media file to its preview', async () => {
+  const mediaWorkspace = Config.workspace('Main', {
+    source: 'content',
+    mediaDir: 'public/media',
+    roots: {media: Config.media()}
+  })
+  const cms = createCMS({schema: {}, workspaces: {main: mediaWorkspace}})
+  const db = new LocalDB(cms.config)
+  await db.sync()
+  const library = await db.create({
+    type: MediaLibrary,
+    root: 'media',
+    set: {title: 'Library', path: 'library'}
+  })
+  await db.create({
+    type: MediaFile,
+    root: 'media',
+    parentId: library._id,
+    set: {
+      title: 'Image',
+      path: 'image',
+      extension: '.jpg',
+      location: '/stored.jpg',
+      previewUrl: 'https://uploads.alinea.cloud/preview.jpg'
+    }
+  })
+  const handle = createHandler({
+    cms,
+    db,
+    remote() {
+      return composeBackend(db)
+    }
+  })
+
+  const response = await handle(
+    new Request('http://localhost/api?file=library/image.jpg'),
+    {...requestContext(), isDev: false}
+  )
+
+  test.is(response.status, 307)
+  test.is(
+    response.headers.get('location'),
+    'https://uploads.alinea.cloud/preview.jpg'
+  )
+  test.is(response.headers.get('cache-control'), 'private, no-store')
+})
+
+test('ignores previews in development', async () => {
+  const mediaWorkspace = Config.workspace('Main', {
+    source: 'content',
+    mediaDir: 'public/media',
+    roots: {media: Config.media()}
+  })
+  const cms = createCMS({schema: {}, workspaces: {main: mediaWorkspace}})
+  const db = new LocalDB(cms.config)
+  await db.sync()
+  await db.create({
+    type: MediaFile,
+    root: 'media',
+    set: {
+      title: 'Image',
+      path: 'image',
+      extension: '.jpg',
+      location: '/stored.jpg',
+      previewUrl: 'https://uploads.alinea.cloud/preview.jpg'
+    }
+  })
+  const handle = createHandler({
+    cms,
+    db,
+    remote() {
+      return composeBackend(db)
+    }
+  })
+
+  const response = await handle(
+    new Request('http://localhost/api?file=image.jpg'),
+    requestContext()
+  )
+
+  test.is(response.status, 307)
+  test.is(response.headers.get('location'), '/media/stored.jpg')
+})
+
+test('proxies database upload previews through the trusted file route', async () => {
+  const mediaWorkspace = Config.workspace('Main', {
+    source: 'content',
+    roots: {media: Config.media()}
+  })
+  const cms = createCMS({schema: {}, workspaces: {main: mediaWorkspace}})
+  const db = new LocalDB(cms.config)
+  await db.sync()
+  await db.create({
+    type: MediaFile,
+    root: 'media',
+    set: {
+      title: 'Image',
+      path: 'image',
+      extension: '.jpg',
+      location: '/stored.jpg',
+      previewUrl: 'http://localhost/api?action=upload&entryId=upload-1'
+    }
+  })
+  const handle = createHandler({
+    cms,
+    db,
+    remote() {
+      return composeBackend(db, {
+        async previewUpload(entryId) {
+          test.is(entryId, 'upload-1')
+          return new Response('image bytes', {
+            headers: {
+              'content-length': '11',
+              'content-type': 'image/jpeg',
+              etag: 'preview-etag'
+            }
+          })
+        }
+      })
+    }
+  })
+  const response = await handle(
+    new Request('http://localhost/api?file=image.jpg&delivery=proxy'),
+    {...requestContext(), isDev: false}
+  )
+
+  test.is(response.status, 200)
+  test.is(response.headers.get('content-type'), 'image/jpeg')
+  test.is(response.headers.get('content-length'), '11')
+  test.is(response.headers.get('etag'), 'preview-etag')
+  test.is(response.headers.get('cache-control'), 'private, no-store')
+  test.is(await response.text(), 'image bytes')
+})
+
+test('redirects a built media file to its public storage location', async () => {
+  const mediaWorkspace = Config.workspace('Main', {
+    source: 'content',
+    mediaDir: 'public/media',
+    roots: {media: Config.media()}
+  })
+  const cms = createCMS({schema: {}, workspaces: {main: mediaWorkspace}})
+  const sourceDb = new LocalDB(cms.config)
+  await sourceDb.create({
+    type: MediaFile,
+    root: 'media',
+    set: {
+      title: 'Guide',
+      path: 'guide',
+      extension: '.pdf',
+      location: '/stored.pdf',
+      previewUrl: 'https://uploads.example/preview.pdf'
+    }
+  })
+  const db = new LocalDB(cms.config, sourceDb.source)
+  await db.sync()
+  const handle = createHandler({
+    cms,
+    db,
+    remote() {
+      return composeBackend(db)
+    }
+  })
+
+  const response = await handle(
+    new Request('http://localhost/api?file=guide.pdf'),
+    requestContext()
+  )
+
+  test.is(response.status, 307)
+  test.is(response.headers.get('location'), '/media/stored.pdf')
+})
+
+test('proxies built public media for the Next image optimizer', async () => {
+  const mediaWorkspace = Config.workspace('Main', {
+    source: 'content',
+    mediaDir: 'public/media',
+    roots: {media: Config.media()}
+  })
+  const cms = createCMS({schema: {}, workspaces: {main: mediaWorkspace}})
+  const sourceDb = new LocalDB(cms.config)
+  await sourceDb.create({
+    type: MediaFile,
+    root: 'media',
+    set: {
+      title: 'Image',
+      path: 'image',
+      extension: '.jpg',
+      location: '/stored.jpg'
+    }
+  })
+  const db = new LocalDB(cms.config, sourceDb.source)
+  await db.sync()
+  const handle = createHandler({
+    cms,
+    db,
+    remote() {
+      return composeBackend(db)
+    }
+  })
+  const originalFetch = globalThis.fetch
+  let requested: URL | undefined
+  globalThis.fetch = Object.assign(
+    async (input: Parameters<typeof fetch>[0]) => {
+      requested = new URL(String(input))
+      return new Response('image bytes', {
+        headers: {'content-length': '11', 'content-type': 'image/jpeg'}
+      })
+    },
+    {preconnect: originalFetch.preconnect}
+  )
+
+  try {
+    const response = await handle(
+      new Request('http://localhost/api?file=image.jpg&delivery=proxy'),
+      requestContext()
+    )
+
+    test.is(requested?.href, 'http://localhost/media/stored.jpg')
+    test.is(response.status, 200)
+    test.is(response.headers.get('content-type'), 'image/jpeg')
+    test.is(response.headers.get('content-length'), '11')
+    test.is(await response.text(), 'image bytes')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('proxies built public media from the server of the build', async () => {
+  const mediaWorkspace = Config.workspace('Main', {
+    source: 'content',
+    mediaDir: 'public/media',
+    roots: {media: Config.media()}
+  })
+  const cms = createCMS({
+    schema: {},
+    workspaces: {main: mediaWorkspace},
+    baseUrl: {production: 'https://example.com'}
+  })
+  const sourceDb = new LocalDB(cms.config)
+  await sourceDb.create({
+    type: MediaFile,
+    root: 'media',
+    set: {
+      title: 'Image',
+      path: 'image',
+      extension: '.jpg',
+      location: '/stored.jpg'
+    }
+  })
+  const db = new LocalDB(cms.config, sourceDb.source)
+  await db.sync()
+  const handle = createHandler({
+    cms,
+    db,
+    remote() {
+      return composeBackend(db)
+    }
+  })
+  const originalFetch = globalThis.fetch
+  const requested: Array<string> = []
+  globalThis.fetch = Object.assign(
+    async (input: Parameters<typeof fetch>[0]) => {
+      requested.push(String(input))
+      return new Response('image bytes', {
+        headers: {'content-type': 'image/jpeg'}
+      })
+    },
+    {preconnect: originalFetch.preconnect}
+  )
+  const production = {
+    apiKey: 'test',
+    handlerUrl: new URL('https://example.com/api'),
+    isDev: false
+  }
+
+  try {
+    // A deployment serves the files of its build on the origin that reached
+    // it, which is not necessarily the configured baseUrl (eg. a preview
+    // deployment), while `next start` serves the files of its build locally
+    for (const context of [
+      production,
+      {...production, publicUrl: new URL('http://localhost:3188')}
+    ]) {
+      const response = await handle(
+        new Request(
+          'https://preview-123.vercel.app/api?file=image.jpg&delivery=proxy'
+        ),
+        context
+      )
+      test.is(response.status, 200)
+    }
+    test.equal(requested, [
+      'https://preview-123.vercel.app/media/stored.jpg',
+      'http://localhost:3188/media/stored.jpg'
+    ])
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('proxies an external preview before a file is built', async () => {
+  const mediaWorkspace = Config.workspace('Main', {
+    source: 'content',
+    roots: {media: Config.media()}
+  })
+  const cms = createCMS({schema: {}, workspaces: {main: mediaWorkspace}})
+  const db = new LocalDB(cms.config)
+  await db.sync()
+  await db.create({
+    type: MediaFile,
+    root: 'media',
+    set: {
+      title: 'Guide',
+      path: 'guide',
+      extension: '.pdf',
+      location: '/guide.pdf',
+      previewUrl: 'data:image/jpeg;base64,cHJldmlldw=='
+    }
+  })
+  const handle = createHandler({
+    cms,
+    db,
+    remote() {
+      return composeBackend(db)
+    }
+  })
+
+  const response = await handle(
+    new Request('http://localhost/api?file=guide.pdf&delivery=proxy'),
+    {...requestContext(), isDev: false}
+  )
+
+  test.is(response.status, 200)
+  test.is(response.headers.get('content-type'), 'image/jpeg')
+  test.is(response.headers.get('cache-control'), 'private, no-store')
+  test.is(await response.text(), 'preview')
+})
+
+test('preserves legacy built locations without a media directory', async () => {
+  const mediaWorkspace = Config.workspace('Main', {
+    source: 'content',
+    roots: {media: Config.media()}
+  })
+  const cms = createCMS({schema: {}, workspaces: {main: mediaWorkspace}})
+  const sourceDb = new LocalDB(cms.config)
+  await sourceDb.create({
+    type: MediaFile,
+    root: 'media',
+    set: {
+      title: 'Guide',
+      path: 'guide',
+      extension: '.pdf',
+      location: '/stored.pdf'
+    }
+  })
+  const db = new LocalDB(cms.config, sourceDb.source)
+  await db.sync()
+  const handle = createHandler({
+    cms,
+    db,
+    remote() {
+      return composeBackend(db)
+    }
+  })
+
+  const response = await handle(
+    new Request('http://localhost/api?file=guide.pdf'),
+    requestContext()
+  )
+
+  test.is(response.status, 307)
+  test.is(response.headers.get('location'), '/stored.pdf')
+})
+
+test('rejects oversized uploads before preparing a remote upload', async () => {
+  const cms = createCMS({
+    schema: {Page},
+    workspaces: {main},
+    maxUploadSize: 3
+  })
+  const db = new LocalDB(cms.config)
+  let prepareCalls = 0
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend({
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        },
+        async prepareUpload() {
+          prepareCalls += 1
+          throw new Error('Should not prepare an oversized upload')
+        }
+      })
+    }
+  })
+
+  const response = await handle(
+    new Request('http://localhost/api?action=upload', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({filename: 'large.jpg', size: 4})
+    }),
+    requestContext()
+  )
+
+  test.is(response.status, 413)
+  test.is(prepareCalls, 0)
+})
+
+function userRequest(operation: string): Request {
+  return new Request(
+    `http://localhost/api?action=user&operation=${operation}`,
+    {
+      headers: {
+        accept: 'application/json'
+      }
+    }
+  )
+}
+
+function authStatusRequest(): Request {
+  return new Request('http://localhost/api?auth=status', {
+    headers: {
+      accept: 'application/json'
+    }
+  })
+}
+
+function capabilitiesRequest(): Request {
+  return new Request('http://localhost/api?action=capabilities', {
+    headers: {
+      accept: 'application/json'
+    }
+  })
+}
+
+function mutationRequest(mutations: Array<unknown>): Request {
+  return new Request('http://localhost/api?action=mutate', {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify(mutations)
+  })
+}
+
+function resolveRequest(query: object): Request {
+  return new Request('http://localhost/api?action=resolve', {
+    method: 'POST',
+    headers: {
+      accept: 'application/json'
+    },
+    body: JSON.stringify(query)
+  })
+}
+
+function requestContext(): RequestContext {
+  return {
+    apiKey: 'test',
+    handlerUrl: new URL('http://localhost/api'),
+    isDev: true
+  }
+}
+
+test('fetches blobs from the remote once for every client that asks', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const remoteDb = new LocalDB(cms.config)
+  await remoteDb.create({type: Page, set: {title: 'Home'}})
+  const tree = await remoteDb.source.getTree()
+  const shas = tree
+    .flat()
+    .tree.filter(entry => entry.type === 'blob')
+    .map(entry => entry.sha)
+  let fetched = 0
+  let treeRequests = 0
+  const handle = createHandler({
+    cms,
+    db: new LocalDB(cms.config),
+    remote(context) {
+      return composeBackend(
+        {
+          getTreeIfDifferent(sha) {
+            treeRequests += 1
+            return remoteDb.getTreeIfDifferent(sha)
+          },
+          async *getBlobs(requested, options) {
+            fetched += requested.length
+            yield* remoteDb.getBlobs(requested, options)
+          }
+        },
+        {
+          async verify(): Promise<AuthedContext> {
+            return {
+              ...context,
+              token: 'test',
+              user: {roles: ['admin'], sub: 'admin'}
+            }
+          }
+        }
+      )
+    }
+  })
+  // Dashboards in several tabs ask for the same changed content
+  for (let client = 0; client < 3; client++) {
+    const response = await handle(
+      new Request('http://localhost/api?action=blob', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({shas})
+      }),
+      requestContext()
+    )
+    test.is(response.status, 200)
+    const received = Array<string>()
+    for await (const [sha] of decodeBlobSequence(response.body!))
+      received.push(sha)
+    test.equal(received, shas)
+  }
+  test.is(fetched, shas.length)
+  // Once the instance has them, nothing asks the remote again
+  test.is(treeRequests, 1)
+})
+
+test('serves current content when a read cannot sync with the remote', async () => {
+  const cms = createCMS({
+    schema: {Page},
+    workspaces: {main},
+    syncInterval: 0
+  })
+  const db = new LocalDB(cms.config)
+  await db.sync()
+  db.syncWith = async () => {
+    throw new Error('Remote unavailable')
+  }
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(db, {
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        }
+      })
+    }
+  })
+  const warn = console.warn
+  const warnings: Array<string> = []
+  console.warn = (message: string) => warnings.push(message)
+  try {
+    const response = await handle(resolveRequest({}), requestContext())
+    test.is(response.status, 200)
+    test.is(warnings.length, 1)
+    test.ok(warnings[0]!.includes('Remote unavailable'))
+  } finally {
+    console.warn = warn
+  }
+})
+
+test('answers reads with current content while a sync hangs', async () => {
+  const cms = createCMS({
+    schema: {Page},
+    workspaces: {main},
+    syncInterval: 0
+  })
+  const db = new LocalDB(cms.config)
+  await db.sync()
+  db.syncWith = () => new Promise(() => {})
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(db, {
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        }
+      })
+    }
+  })
+  const warn = console.warn
+  const warnings: Array<string> = []
+  console.warn = (message: string) => warnings.push(message)
+  jest.useFakeTimers()
+  try {
+    const sha = new Request('http://localhost/api?action=sha', {
+      headers: {accept: 'application/json'}
+    })
+    // The second resolve queues behind the hung sync of the first
+    const requests = [resolveRequest({}), resolveRequest({}), sha]
+    const statuses: Array<number> = []
+    for (const request of requests)
+      void handle(request, requestContext()).then(response =>
+        statuses.push(response.status)
+      )
+    for (let tick = 0; tick < 20 && statuses.length < 3; tick++) {
+      await new Promise(resolve => setImmediate(resolve))
+      jest.advanceTimersByTime(syncWait)
+    }
+    test.equal(statuses, [200, 200, 200])
+    test.ok(warnings.every(warning => warning.includes('Timed out')))
+  } finally {
+    jest.useRealTimers()
+    console.warn = warn
+  }
+})
+
+test('responds with the content sha after syncing', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const remoteDb = new LocalDB(cms.config)
+  await remoteDb.create({type: Page, set: {title: 'Home'}})
+  const db = new LocalDB(cms.config)
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(remoteDb, {
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        }
+      })
+    }
+  })
+
+  const response = await handle(
+    new Request('http://localhost/api?action=sha', {
+      headers: {accept: 'application/json'}
+    }),
+    requestContext()
+  )
+
+  test.is(response.status, 200)
+  const sha = await response.json()
+  test.is(sha, await remoteDb.sha)
+  test.is(sha, await db.sha)
+})
+
+test('answers a current tree request without syncing first', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const remoteDb = new LocalDB(cms.config)
+  await remoteDb.create({type: Page, set: {title: 'Home'}})
+  const db = new LocalDB(cms.config)
+  const before = await db.sha
+  const handle = createHandler({
+    cms,
+    db,
+    remote(context) {
+      return composeBackend(remoteDb, {
+        async verify(): Promise<AuthedContext> {
+          return {
+            ...context,
+            token: 'test',
+            user: {roles: ['admin'], sub: 'admin'}
+          }
+        }
+      })
+    }
+  })
+  const tree = (sha: string) =>
+    handle(
+      new Request(`http://localhost/api?action=tree&sha=${sha}`, {
+        headers: {accept: 'application/json'}
+      }),
+      requestContext()
+    ).then(response => response.json())
+
+  test.is(await tree(await remoteDb.sha), null)
+  test.is(await db.sha, before)
+  test.is((await tree(before)).sha, await remoteDb.sha)
+  test.is(await db.sha, await remoteDb.sha)
+})
+
+test('rejects unauthenticated sha requests like tree requests', async () => {
+  const cms = createCMS({schema: {Page}, workspaces: {main}})
+  const db = new LocalDB(cms.config)
+  const handle = createHandler({
+    cms,
+    db,
+    remote() {
+      return composeBackend(db, {
+        async verify(): Promise<AuthedContext> {
+          throw new MissingCredentialsError('Missing user credentials')
+        }
+      })
+    }
+  })
+  const request = (query: string) =>
+    new Request(`http://localhost/api?${query}`, {
+      headers: {accept: 'application/json'}
+    })
+
+  const tree = await handle(request('action=tree&sha=abc'), requestContext())
+  const sha = await handle(request('action=sha'), requestContext())
+  test.is(tree.status, 401)
+  test.is(sha.status, 401)
+})

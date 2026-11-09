@@ -1,0 +1,598 @@
+{
+  "_id": "3JjNWjycrc5b8HEqhLEx7vLGHqQ",
+  "_type": "Docs",
+  "_index": "a0",
+  "title": "Components",
+  "navigationTitle": "",
+  "body": [
+    {
+      "_type": "paragraph",
+      "textAlign": "left",
+      "content": [
+        {
+          "_type": "text",
+          "text": "The dashboard is built from a library of React components, exported from `alinea/components`. Use them in "
+        },
+        {
+          "_type": "text",
+          "text": "custom fields",
+          "marks": [
+            {
+              "_type": "link",
+              "_id": "3JkF1t8kNJcObY01nLImXnSFh9T",
+              "_link": "entry",
+              "_entry": "286iEJsjhd8R9NxN6EVg59fELyd"
+            }
+          ]
+        },
+        {
+          "_type": "text",
+          "text": ", `Field.view` sections and custom entry or root views, so your additions look and behave like the rest of the dashboard, in light and dark mode."
+        }
+      ]
+    },
+    {
+      "_type": "ComponentCatalogBlock",
+      "_id": "3JmLMquNdifN54Wr3qxj00VEvc2",
+      "showKind": true
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Entry points"
+        }
+      ],
+      "_anchor": "entry-points"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Custom dashboard code imports from two entry points:"
+        }
+      ]
+    },
+    {
+      "_type": "bulletList",
+      "content": [
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`alinea/components`: generic UI building blocks, such as buttons, inputs, dialogs and tables. They don't know about your content and work anywhere inside the dashboard."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`alinea/cms`: what is tied to the CMS, such as the hooks that read and write field values, the entry being edited and the signed-in user, `FieldChrome` and the prop types of field, type and root views. See "
+                },
+                {
+                  "_type": "text",
+                  "text": "the alinea/cms API",
+                  "marks": [
+                    {
+                      "_type": "link",
+                      "_id": "3JlSsIfoORPSTzVmlcGVHt1CFfU",
+                      "_link": "entry",
+                      "_entry": "286iEJsjhd8R9NxN6EVg59fELyd",
+                      "_anchor": "hooks"
+                    }
+                  ]
+                },
+                {
+                  "_type": "text",
+                  "text": " in Custom fields."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_id": "3JjflViXwJCI3t5K6eARQYBLHzu",
+      "_type": "ImageBlock",
+      "image": {
+        "_id": "3JjflQpOXvKkrT9JMYnTRROZGKT",
+        "_type": "image",
+        "_entry": "3JjeypESFeYvmOWKh1BvKaDtCpe"
+      },
+      "darkImage": {
+        "_id": "3JjflUvLy315mGY9pYXgYc8q8W7",
+        "_type": "image",
+        "_entry": "3Jjf6X1hAnKCbxkKnnUx4LThjNZ"
+      },
+      "caption": "A stock overview panel in the demo, a custom view built with alinea/components."
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Usage"
+        }
+      ],
+      "_anchor": "usage"
+    },
+    {
+      "_id": "3JjNWim7SkrxztPeoQ9o58qXo6U",
+      "_type": "CodeBlock",
+      "code": "import {type FieldViewProps, useField, useFieldOptions} from 'alinea/cms'\nimport {Select, SelectItem} from 'alinea/components'\nimport type {Priority, PriorityField} from './Priority'\n\nexport function PriorityView({field}: FieldViewProps<PriorityField>) {\n  const [value, setValue] = useField(field)\n  const options = useFieldOptions(field)\n  return (\n    <Select\n      label={options.label}\n      value={value}\n      onValueChange={next => setValue((next ?? 'normal') as Priority)}\n      readOnly={options.readOnly}\n    >\n      <SelectItem value=\"low\">Low</SelectItem>\n      <SelectItem value=\"normal\">Normal</SelectItem>\n      <SelectItem value=\"high\">High</SelectItem>\n    </Select>\n  )\n}",
+      "fileName": "fields/Priority.view.tsx",
+      "language": "tsx",
+      "compact": false
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "The components are styled by the dashboard's stylesheet and theme. They are meant for code that runs inside the dashboard, but work on other pages too (see Theme tokens below)."
+        }
+      ]
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Conventions"
+        }
+      ],
+      "_anchor": "conventions"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "The API follows "
+        },
+        {
+          "_type": "text",
+          "text": "shadcn/ui",
+          "marks": [
+            {
+              "_type": "link",
+              "_id": "3JkF1wiBg1h5NgzZRZ534TyY5Td",
+              "_link": "url",
+              "href": "https://ui.shadcn.com"
+            }
+          ]
+        },
+        {
+          "_type": "text",
+          "text": " and "
+        },
+        {
+          "_type": "text",
+          "text": "Radix",
+          "marks": [
+            {
+              "_type": "link",
+              "_id": "3JkF1s8hG3VLMpCJ9ehOhvqGqik",
+              "_link": "url",
+              "href": "https://www.radix-ui.com"
+            }
+          ]
+        },
+        {
+          "_type": "text",
+          "text": ", so the names will feel familiar:"
+        }
+      ]
+    },
+    {
+      "_type": "bulletList",
+      "content": [
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Compound components are named after their parts: `Dialog`, `DialogTrigger`, `DialogContent`, `DialogTitle`."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Controlled and uncontrolled state use the same prop names everywhere: `value`, `defaultValue` and `onValueChange`; `checked` and `onCheckedChange`; `open`, `defaultOpen` and `onOpenChange`."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Form controls take `label`, `description`, `error`, `required`, `disabled`, `readOnly`, `icon` and `shared`, and render their label and messages with `Field`."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Dates and times are ISO strings (`2026-09-23`, `14:30`). Collection keys are strings or numbers, and a selection is a `Set` of keys or `'all'`."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Every component accepts `className` and `style`. Each rendered part has a `data-slot` attribute (`data-slot=\"dialog-content\"`), and variants are exposed as `data-variant` and `data-size`, which gives your CSS stable hooks."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Colors, fonts and radii come from CSS variables such as `--alinea-fg`, `--alinea-bg`, `--alinea-border`, `--alinea-primary` and `--alinea-radius`. Use them in your own styles to follow the theme."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "The props of every component are typed, so your editor shows what each one accepts. Types shared between components, such as `Selection`, `Key` and `IconType`, are exported as types from `alinea/components` too."
+        }
+      ]
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Icons"
+        }
+      ],
+      "_anchor": "icons"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Components with an `icon` prop take an icon component (any component that renders an `<svg>`, such as those from "
+        },
+        {
+          "_type": "text",
+          "text": "react-icons",
+          "marks": [
+            {
+              "_type": "link",
+              "_id": "3JkF1t9BoVUIUdseAJR2qsl0pzs",
+              "_link": "url",
+              "href": "https://react-icons.github.io/react-icons"
+            }
+          ]
+        },
+        {
+          "_type": "text",
+          "text": " or copied from "
+        },
+        {
+          "_type": "text",
+          "text": "Icones",
+          "marks": [
+            {
+              "_type": "link",
+              "_id": "3JkF1tj4PgFZlquI43a2ClsY09y",
+              "_link": "url",
+              "href": "https://icones.js.org"
+            }
+          ]
+        },
+        {
+          "_type": "text",
+          "text": ") or an element. The icons of the dashboard itself are exported from `alinea/dashboard/icons`."
+        }
+      ]
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Theme tokens"
+        }
+      ],
+      "_anchor": "theme-tokens"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "The components are styled with CSS custom properties. `alinea/css` declares them, and its resets, only on elements with a `data-alinea-theme` attribute, so loading the stylesheet doesn't restyle the rest of a page. The dashboard sets the attribute on `<html>`, and popovers, dialogs and tooltips set it on themselves since they render outside the page. To use the components on a page of your site, import `alinea/css` and render them inside an element with `data-alinea-theme`. Add `data-theme=\"light\"` or `data-theme=\"dark\"` to that element to fix the color scheme, otherwise it follows the page."
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "A theme only sets the inputs, as `light-dark()` pairs where a value differs per color scheme. Every other token is derived from them. Set them on the element with `data-alinea-theme`, for example `<div data-alinea-theme className=\"brand-theme\">`:"
+        }
+      ]
+    },
+    {
+      "_id": "3KdRBMWfptkCX27NxD2Hms6iOwA",
+      "_type": "CodeBlock",
+      "fileName": "theme.css",
+      "language": "css",
+      "compact": false,
+      "code": ".brand-theme {\n  --alinea-radius: 6px;\n  --alinea-bg: light-dark(#ffffff, #18181b);\n  --alinea-fg: light-dark(#27272a, #e4e4e7);\n  --alinea-primary: light-dark(#2f6b45, #5fbf82);\n}"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Popovers, dialogs and tooltips render outside that element and carry the attribute themselves, so a class on the page doesn't reach them: use `[data-alinea-theme]` as the selector to theme every part of the components on a page."
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Inputs:"
+        }
+      ]
+    },
+    {
+      "_type": "bulletList",
+      "content": [
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`--alinea-font`, `--alinea-mono-font`, `--alinea-font-size-base` and `--alinea-radius`."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`--alinea-backdrop` (behind panels), `--alinea-bg` (panels), `--alinea-fg` (text) and `--alinea-border`."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`--alinea-primary`, `--alinea-danger`, `--alinea-warning` and `--alinea-success`, with `--alinea-primary-fg`, `--alinea-danger-fg` and `--alinea-warning-fg` for text on them."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`--alinea-ring`: the focus ring."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`--alinea-workspace-color`: the `color` option of the current workspace, set by the dashboard. It falls back to `--alinea-primary`."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Derived tokens, to read in your own styles:"
+        }
+      ]
+    },
+    {
+      "_type": "bulletList",
+      "content": [
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Text: `--alinea-fg-strong`, `--alinea-fg-muted`, `--alinea-fg-disabled` and `--alinea-field-label`."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Surfaces: `--alinea-bg-muted`, `--alinea-muted` (hover backgrounds), `--alinea-input`, `--alinea-overlay`, `--alinea-scrim` (behind dialogs) and `--alinea-border-strong`."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Tones: `--alinea-selected` and `--alinea-selected-fg`, and a `-subtle` background with a `-subtle-fg` text color for `primary`, `danger`, `warning` and `success`, eg. `--alinea-danger-subtle`."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Entry statuses: `--alinea-status-published`, `--alinea-status-draft` and `--alinea-status-unpublished`, each with a `-fg` color."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Shape and motion: `--alinea-radius-sm`, `--alinea-radius-lg`, `--alinea-radius-xl`, `--alinea-shadow-raised`, `--alinea-shadow-muted`, `--alinea-shadow-tooltip`, `--alinea-shadow-modal` and `--alinea-transition`."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "The color palette the default theme is built from (`--alinea-gray-500`, `--alinea-blue-800`, ...) is not part of this list and can change."
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "title": "",
+    "description": "",
+    "openGraph": {
+      "title": "",
+      "image": {},
+      "description": ""
+    },
+    "aliases": [],
+    "createdAt": 1790179547,
+    "createdBy": {
+      "name": "Ben Merckx",
+      "email": "ben@codeurs.be"
+    },
+    "updatedAt": 1790261530,
+    "updatedBy": {
+      "name": "Ben Merckx",
+      "email": "ben@codeurs.be"
+    }
+  }
+}

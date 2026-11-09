@@ -1,0 +1,66 @@
+@use '@/style' as *;
+
+.root {
+  width: 100%;
+  max-width: calc(var(--web-content-width) + 2 * var(--web-gutter));
+  margin: 0 auto;
+  padding: 0 var(--web-gutter) var(--web-section-gap);
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+  padding-top: 96px;
+
+  @include sm {
+    padding-top: 48px;
+  }
+
+  &-title {
+    margin: 0;
+    font-family: var(--web-title-font);
+    font-weight: 500;
+    font-size: 44px;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+
+    @include sm {
+      font-size: 36px;
+    }
+  }
+
+  &-description {
+    margin: 0;
+    max-width: 560px;
+    font-size: 19px;
+    line-height: 1.55;
+    color: var(--web-foreground-faded);
+
+    @include sm {
+      font-size: 17px;
+    }
+  }
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  align-items: start;
+  gap: 80px;
+  padding-top: 88px;
+
+  @include sm {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    padding-top: 32px;
+  }
+}
+
+.releases {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: 840px;
+}

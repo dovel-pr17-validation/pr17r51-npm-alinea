@@ -1,0 +1,34 @@
+.root {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin: -4px -6px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  color: var(--web-foreground-muted);
+  cursor: pointer;
+  transition:
+    color 0.15s ease-out,
+    background 0.15s ease-out;
+
+  &:hover,
+  &:focus-visible {
+    color: var(--web-foreground);
+    background: color-mix(in srgb, var(--web-foreground) 6%, transparent);
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--web-accent);
+    outline-offset: -2px;
+  }
+
+  &.is-copied {
+    color: var(--web-positive-foreground);
+  }
+
+  &-icon {
+    font-size: 15px;
+  }
+}

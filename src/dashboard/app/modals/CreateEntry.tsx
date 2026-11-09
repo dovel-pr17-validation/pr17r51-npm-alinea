@@ -1,0 +1,330 @@
+import {
+  Alert,
+  AlertDescription,
+  Button,
+  Field,
+  Select,
+  SelectItem,
+  Text,
+  TextField,
+  ToggleGroup,
+  ToggleGroupItem,
+  useDialog
+} from '#/components.js'
+import {getType} from '#/core/Internal.js'
+import {Reference} from '#/core/Reference.js'
+import {Schema} from '#/core/Schema.js'
+import {Type, type as createType} from '#/core/Type.js'
+import {createEntryAtom} from '../../atoms/create.js'
+import {configAtom} from '../../atoms/core.js'
+import {ReactiveNode} from '../../atoms/ReactiveNode.js'
+import {policyAtom} from '../../atoms/user.js'
+import {useDashboardContext} from '../../hooks.js'
+import {entry as entryField} from '#/field/link.js'
+import type {LinkField} from '#/field/link/LinkField.js'
+import {EntryReference} from '#/picker/entry/EntryReference.js'
+import styler from '@alinea/styler'
+import {atom, useAtomValueRaw, useSetAtom, type WritableAtom} from 'jotai'
+import {
+  Suspense,
+  useId,
+  useMemo,
+  useState,
+  type FormEvent,
+  type SetStateAction
+} from 'react'
+import {
+  IcBaselineErrorOutline,
+  IcRoundFirstPage,
+  IcRoundLastPage
+} from '../../icons.js'
+import {NodeEditor} from '../NodeEditor.js'
+import {
+  DashboardModalContent,
+  DashboardModalDialog,
+  DashboardModalFooter
+} from '../ui/DashboardModal.js'
+import css from './CreateEntry.module.css'
+
+const styles = styler(css)
+
+type LinkFieldValueAtom = WritableAtom<
+  EntryReference | null,
+  [SetStateAction<EntryReference | null>],
+  void
+>
+
+interface TypeOption {
+  id: string
+  label: string
+}
+
+interface LinkEditor {
+  node: ReactiveNode<object>
+  type: Type
+  value: LinkFieldValueAtom
+}
+
+function entryReference(id: string, key: string): EntryReference {
+  return {
+    [Reference.id]: key,
+    [Reference.type]: 'entry',
+    [EntryReference.entry]: id
+  }
+}
+
+function entryIdOf(value: EntryReference | null | undefined) {
+  return EntryReference.isEntryReference(value)
+    ? value[EntryReference.entry]
+    : undefined
+}
+
+function buildTypeOptions(
+  schema: Record<string, Type>,
+  types: Array<string>
+): Array<TypeOption> {
+  return types
+    .map(type => {
+      const schemaType = schema[type]
+      if (!schemaType || Type.isHidden(schemaType)) return null
+      return {id: type, label: getType(schemaType).label}
+    })
+    .filter((option): option is TypeOption => option !== null)
+}
+
+function createLinkEditor(
+  key: string,
+  field: LinkField<EntryReference, unknown>,
+  initialValue?: EntryReference | null
+): LinkEditor {
+  const formType = createType(`${key} link`, {fields: {[key]: field}})
+  const value = Type.initialValue(formType) as Record<string, unknown>
+  if (initialValue !== undefined) value[key] = initialValue
+  const node = new ReactiveNode(value as object)
+  return {
+    node,
+    type: formType,
+    value: node.field(key) as LinkFieldValueAtom
+  }
+}
+
+function CreateEntryLoading() {
+  return <DashboardModalDialog variant="explorer" isLoading />
+}
+
+function CreateEntryForm() {
+  const modal = useDialog()
+  const {page, root} = useDashboardContext()
+  const createEntry = useSetAtom(createEntryAtom)
+  const config = useAtomValueRaw(configAtom).schema
+  const policy = useAtomValueRaw(policyAtom)
+  const {locale} = page
+  const tree = root.tree(locale)
+  const selectedItem = useAtomValueRaw(tree.selectedItem)
+  const rootData = useAtomValueRaw(root.data)
+  const initialParentId = useMemo(() => {
+    if (!page.entry || !selectedItem) return undefined
+    const type = config[selectedItem.type]
+    return type && Type.isContainer(type)
+      ? selectedItem.id
+      : (selectedItem.parentId ?? undefined)
+  }, [config, page.entry, selectedItem])
+  const [title, setTitle] = useState('')
+  const [selectedTypeOverride, setSelectedType] = useState<string | null>(null)
+  const [insertOrder, setInsertOrder] = useState<'first' | 'last'>('last')
+  const [isCreating, setIsCreating] = useState(false)
+  const [error, setError] = useState<string>()
+  const formId = useId()
+  const containerTypes = useMemo(
+    () =>
+      Object.entries(config)
+        .filter(([, type]) => Type.isContainer(type) && !Type.isHidden(type))
+        .map(([name]) => name),
+    [config]
+  )
+
+  const parent = useMemo(() => {
+    const field = entryField('Parent', {
+      condition: {_type: {in: containerTypes}},
+      initialValue: initialParentId
+        ? entryReference(initialParentId, 'parent')
+        : null!,
+      location: {workspace: root.workspace, root: root.key},
+      title: 'Select parent'
+    }) as LinkField<EntryReference, unknown>
+    return createLinkEditor(
+      'parent',
+      field,
+      initialParentId ? entryReference(initialParentId, 'parent') : null
+    )
+  }, [containerTypes, initialParentId, root.key, root.workspace])
+  const parentValue = useAtomValueRaw(parent.value)
+  const parentId = entryIdOf(parentValue)
+  const parentItemAtom = useMemo(
+    () =>
+      atom(get => {
+        const id = entryIdOf(get(parent.value))
+        return id ? get(tree.item(id)) : undefined
+      }),
+    [parent.value, tree]
+  )
+  const parentItem = useAtomValueRaw(parentItemAtom)
+  const parentType = parentItem ? config[parentItem.type] : undefined
+  const allowed = parentType
+    ? Schema.contained(config, Type.contains(parentType))
+    : Schema.contained(config, rootData.contains ?? [])
+  const parentIds = parentItem ? [parentItem.id, ...parentItem.parents] : []
+  const typeOptions = buildTypeOptions(config, allowed).filter(option =>
+    policy.canCreate({
+      workspace: root.workspace,
+      root: root.key,
+      locale,
+      parents: parentIds,
+      type: option.id
+    })
+  )
+  const selectedType =
+    selectedTypeOverride &&
+    typeOptions.some(option => option.id === selectedTypeOverride)
+      ? selectedTypeOverride
+      : (typeOptions[0]?.id ?? null)
+
+  const copyFrom = useMemo(() => {
+    const field = entryField('Copy content from', {
+      condition: {_type: selectedType ?? ''},
+      location: {workspace: root.workspace, root: root.key},
+      readOnly: !selectedType,
+      title: 'Select entry'
+    }) as LinkField<EntryReference, unknown>
+    return createLinkEditor('copyFrom', field)
+  }, [root.key, root.workspace, selectedType])
+  const copyFromValue = useAtomValueRaw(copyFrom.value)
+  const copyFromId = entryIdOf(copyFromValue)
+  const showInsertOrder = parentType
+    ? Type.insertOrder(parentType) === 'free'
+    : true
+
+  async function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const nextTitle = title.trim()
+    if (isCreating || !selectedType || !nextTitle) return
+    setIsCreating(true)
+    setError(undefined)
+    try {
+      await createEntry({
+        workspace: root.workspace,
+        root: root.key,
+        locale,
+        parentId,
+        type: selectedType,
+        title: nextTitle,
+        copyFrom: copyFromId,
+        insertOrder: showInsertOrder ? insertOrder : undefined
+      })
+      modal.close()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setIsCreating(false)
+    }
+  }
+
+  const canCreate = Boolean(selectedType && title.trim())
+
+  return (
+    <DashboardModalDialog variant="explorer" label="Create entry">
+      <form onSubmit={onSubmit} id={formId}>
+        <DashboardModalContent>
+          <TextField
+            autoFocus
+            value={title}
+            onValueChange={setTitle}
+            label="Title"
+            required
+          />
+
+          <Select
+            label="Type"
+            value={selectedType}
+            onValueChange={setSelectedType}
+            required
+          >
+            {typeOptions.map(option => (
+              <SelectItem value={option.id} key={option.id}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </Select>
+
+          {typeOptions.length === 0 && (
+            <Text as="p" color="muted">
+              No entry types are available at this location.
+            </Text>
+          )}
+
+          <div className={styles.CreateEntry.parentRow()}>
+            <div className={styles.CreateEntry.parentField()}>
+              <NodeEditor node={parent.node} type={parent.type} />
+            </div>
+            {showInsertOrder && (
+              <Field
+                label="Insert"
+                className={styles.CreateEntry.insertOrder()}
+              >
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  aria-label="Insert"
+                  className={styles.CreateEntry.insertOrder.toggle()}
+                  value={insertOrder}
+                  onValueChange={value => {
+                    if (value === 'first' || value === 'last')
+                      setInsertOrder(value)
+                  }}
+                >
+                  <ToggleGroupItem value="first" icon={IcRoundFirstPage}>
+                    First
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="last" icon={IcRoundLastPage}>
+                    Last
+                  </ToggleGroupItem>
+                </ToggleGroup>
+              </Field>
+            )}
+          </div>
+
+          <NodeEditor node={copyFrom.node} type={copyFrom.type} />
+
+          {error && (
+            <Alert variant="destructive" icon={IcBaselineErrorOutline}>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+        </DashboardModalContent>
+      </form>
+
+      <DashboardModalFooter>
+        <Button type="button" variant="outline" onClick={modal.close}>
+          Cancel
+        </Button>
+        <Button
+          type="submit"
+          form={formId}
+          color="primary"
+          disabled={!canCreate}
+          loading={isCreating}
+        >
+          Create entry
+        </Button>
+      </DashboardModalFooter>
+    </DashboardModalDialog>
+  )
+}
+
+export function CreateEntry() {
+  return (
+    <Suspense fallback={<CreateEntryLoading />}>
+      <CreateEntryForm />
+    </Suspense>
+  )
+}

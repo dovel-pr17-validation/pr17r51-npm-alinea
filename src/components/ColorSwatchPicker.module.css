@@ -1,0 +1,37 @@
+.ColorSwatchPicker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+
+  &[data-layout='stack'] {
+    flex-direction: column;
+  }
+}
+
+.ColorSwatchPickerItem {
+  position: relative;
+  border-radius: var(--alinea-radius-sm);
+  outline: none;
+  cursor: pointer;
+  forced-color-adjust: none;
+
+  &:focus-visible {
+    outline: 2px solid var(--alinea-ring);
+    outline-offset: 2px;
+  }
+
+  &[aria-selected='true']::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border: 2px solid var(--alinea-fg);
+    border-radius: inherit;
+    outline: 2px solid var(--alinea-bg);
+    outline-offset: -4px;
+  }
+
+  &[aria-disabled='true'] {
+    opacity: 0.5;
+    cursor: default;
+  }
+}

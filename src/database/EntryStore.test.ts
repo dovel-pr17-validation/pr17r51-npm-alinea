@@ -1,0 +1,750 @@
+import type {Config} from '#/core/Config.js'
+import {Entry} from '#/core/Entry.js'
+import type {Mutation} from '#/core/db/Mutation.js'
+import {MemorySource} from '#/core/source/MemorySource.js'
+import {transaction} from '#/core/source/Source.js'
+import {ReadonlyTree} from '#/core/source/Tree.js'
+import {createEntryRow} from '#/core/util/EntryRows.js'
+import {Config as ConfigBuilder, Field} from '#/index.js'
+import {expect, test} from 'bun:test'
+import {Database} from 'bun:sqlite'
+import {connect} from 'rado/driver/bun-sqlite'
+import {DatabaseSource} from './DatabaseSource.js'
+import {openWasmDatabase} from './driver/WasmDatabase.js'
+import {EntryDatabase} from './EntryDatabase.js'
+import {EntryStore} from './EntryStore.js'
+
+const Page = ConfigBuilder.document('Page', {
+  fields: {title: Field.text('Title')}
+})
+const config: Config = {
+  schema: {Page},
+  workspaces: {
+    main: ConfigBuilder.workspace('Main', {
+      source: 'content',
+      roots: {pages: ConfigBuilder.root('Pages', {contains: ['Page']})}
+    })
+  }
+}
+
+function createStore(source = new MemorySource(), storeConfig = config) {
+  const sqlite = new Database(':memory:')
+  const db = connect(sqlite)
+  return EntryDatabase.createSchema(
+    db,
+    storeConfig,
+    ReadonlyTree.EMPTY.sha
+  ).then(() => ({
+    sqlite,
+    store: new EntryStore(
+      storeConfig,
+      new EntryDatabase(storeConfig, db),
+      source
+    )
+  }))
+}
+
+interface ForkedConnection {
+  closed: boolean
+}
+
+/** A store that owns a forkable connection, recording what it forks. */
+async function createForkableStore(source = new MemorySource()) {
+  const handle = await openWasmDatabase()
+  const forks = Array<ForkedConnection>()
+  await EntryDatabase.createSchema(
+    handle.database,
+    config,
+    ReadonlyTree.EMPTY.sha
+  )
+  const database = new EntryDatabase(config, handle.database, {
+    async fork() {
+      const copy = await handle.fork()
+      const forked: ForkedConnection = {closed: false}
+      forks.push(forked)
+      const close = copy.database.close.bind(copy.database)
+      copy.database.close = async () => {
+        forked.closed = true
+        close()
+      }
+      return copy
+    }
+  })
+  const store = new EntryStore(config, database, source, {ownsDatabase: true})
+  return {store, forks}
+}
+
+test('entry store mutates its source and database together', async () => {
+  const {sqlite, store} = await createStore()
+  try {
+    const {sha} = await store.mutate([
+      {
+        op: 'create',
+        id: 'page',
+        type: 'Page',
+        locale: null,
+        data: {title: 'Page'}
+      }
+    ])
+    expect((await store.source.getTree()).sha).toBe(sha)
+    expect(await store.sha).toBe(sha)
+    expect(await store.find({select: Entry.title})).toEqual(['Page'])
+  } finally {
+    sqlite.close()
+  }
+})
+
+function createPages(store: EntryStore, title = (id: string) => `Title ${id}`) {
+  return store.mutate(
+    ['page', 'other', 'third'].map(id => ({
+      op: 'create' as const,
+      id,
+      type: 'Page',
+      locale: null,
+      data: {title: title(id)}
+    }))
+  )
+}
+
+async function pagesStore() {
+  const created = await createStore()
+  await createPages(created.store)
+  return created
+}
+
+const plannedMutations: Array<Array<Mutation>> = [
+  [
+    {
+      op: 'update',
+      id: 'page',
+      locale: null,
+      status: 'published',
+      set: {title: 'Changed'}
+    }
+  ],
+  [{op: 'archive', id: 'other', locale: null}],
+  [{op: 'move', id: 'third', target: 'page', dropPosition: 'before'}],
+  [{op: 'remove', id: 'page'}],
+  [
+    {
+      op: 'create',
+      id: 'created',
+      type: 'Page',
+      locale: null,
+      data: {title: 'Created'}
+    },
+    {op: 'unpublish', id: 'other', locale: null}
+  ]
+]
+
+test('requests plan the commit mutate applies and leave the store', async () => {
+  for (const mutations of plannedMutations) {
+    const planning = await pagesStore()
+    const applying = await pagesStore()
+    const {sqlite, store} = planning
+    try {
+      const tempTables = () =>
+        sqlite
+          .query(`select name from sqlite_temp_master where type = 'table'`)
+          .all()
+      const state = async () => ({
+        sha: await store.sha,
+        tree: (await store.source.getTree()).sha,
+        rows: await store.find({
+          status: 'all',
+          select: {filePath: Entry.filePath, title: Entry.title}
+        }),
+        found: await store.find({search: 'title', select: Entry.id})
+      })
+      const before = await state()
+      const tables = tempTables()
+      const request = await store.request(mutations)
+      expect(await state()).toEqual(before)
+      expect(tempTables()).toEqual(tables)
+      const {sha} = await applying.store.mutate(mutations)
+      expect(request.intoSha).toBe(sha)
+      expect(await store.write(request)).toEqual({sha})
+      expect(await store.find({status: 'all', select: Entry.filePath})).toEqual(
+        await applying.store.find({status: 'all', select: Entry.filePath})
+      )
+    } finally {
+      planning.sqlite.close()
+      applying.sqlite.close()
+    }
+  }
+})
+
+test('reads during a request never see the planned commit', async () => {
+  const {sqlite, store} = await pagesStore()
+  try {
+    // Each read polls on its own: a pending query holds up those behind it.
+    async function pollDuringRequest<T>(read: () => Promise<T>) {
+      let planning = true
+      const seen = Array<T>()
+      const request = store
+        .request(plannedMutations.flat())
+        .finally(() => (planning = false))
+      while (planning) {
+        seen.push(await read())
+        // Let the request continue past its asynchronous hashing.
+        await new Promise(resolve => setTimeout(resolve))
+      }
+      await request
+      return seen
+    }
+    const sha = await store.sha
+    const shas = await pollDuringRequest(() => store.sha)
+    expect(shas.length).toBeGreaterThan(1)
+    expect(new Set(shas)).toEqual(new Set([sha]))
+    const titles = await store.find({select: Entry.title})
+    const found = await pollDuringRequest(() =>
+      store.find({select: Entry.title})
+    )
+    for (const read of found) expect(read).toEqual(titles)
+    // Planning writes no temporary overlay tables, not even while it runs.
+    const tables = await pollDuringRequest(async () =>
+      sqlite
+        .query(`select name from sqlite_temp_master where type = 'table'`)
+        .all()
+    )
+    expect(tables.flat()).toEqual([])
+  } finally {
+    sqlite.close()
+  }
+})
+
+test('a store sourced from its own database plans requests', async () => {
+  const {store} = await createForkableStore()
+  await createPages(store)
+  // Like a generated database: the source reads the rows being moved.
+  const generated = sourcedFromDatabase(store)
+  try {
+    const before = await generated.sha
+    for (const mutations of plannedMutations) {
+      const request = await generated.request(mutations)
+      expect(request.fromSha).toBe(before)
+      expect(await generated.sha).toBe(before)
+    }
+  } finally {
+    await generated.close()
+    await store.close()
+  }
+})
+
+/** A store over another's database, sourced from it like a generated one. */
+function sourcedFromDatabase(store: EntryStore) {
+  return new EntryStore(
+    config,
+    store.database,
+    new DatabaseSource(store.database),
+    {sourceFollowsDatabase: true}
+  )
+}
+
+async function previewStore(forkable = true) {
+  const created = forkable
+    ? await createForkableStore()
+    : {...(await createStore()), forks: Array<ForkedConnection>()}
+  const {store, forks} = created
+  await createPages(store, () => 'Published')
+  const openForks = () => forks.filter(fork => !fork.closed)
+  async function preview(id: string, title: string, path?: string) {
+    const entry = await store.get({id, select: Entry})
+    const {rowHash: _rowHash, fileHash: _fileHash, ...base} = entry
+    const moved = path && {
+      path,
+      url: `/${path}`,
+      filePath: entry.filePath.replace(`${entry.path}.json`, `${path}.json`)
+    }
+    return createEntryRow(
+      config,
+      {...base, ...moved, title, data: {...entry.data, title, path}},
+      entry.status
+    )
+  }
+  const rows = (target: EntryStore, previewed?: Entry) =>
+    target.find({
+      status: 'all',
+      select: {
+        id: Entry.id,
+        path: Entry.path,
+        filePath: Entry.filePath,
+        title: Entry.title
+      },
+      preview: previewed && {entry: previewed}
+    })
+  async function titles(previewed?: Entry) {
+    const found = await store.find({
+      select: {id: Entry.id, title: Entry.title},
+      preview: previewed && {entry: previewed}
+    })
+    return Object.fromEntries(found.map(row => [row.id, row.title]))
+  }
+  return {...created, openForks, preview, rows, titles}
+}
+
+test('concurrent previews of different entries keep one overlay open', async () => {
+  const {store, forks, openForks, preview, titles} = await previewStore()
+  try {
+    const first = await preview('page', 'First')
+    const second = await preview('other', 'Second')
+    const firstTitles = {page: 'First', other: 'Published', third: 'Published'}
+    const secondTitles = {
+      page: 'Published',
+      other: 'Second',
+      third: 'Published'
+    }
+    // Two editors render at once: every query sees its own payload only.
+    const results = await Promise.all(
+      [first, second, first, second, first, second].map(titles)
+    )
+    expect(results).toEqual([
+      firstTitles,
+      secondTitles,
+      firstTitles,
+      secondTitles,
+      firstTitles,
+      secondTitles
+    ])
+    expect(openForks()).toHaveLength(1)
+    expect(await titles()).toEqual({
+      page: 'Published',
+      other: 'Published',
+      third: 'Published'
+    })
+  } finally {
+    await store.close()
+  }
+  // Closing the store closes its preview overlay.
+  expect(forks.every(fork => fork.closed)).toBe(true)
+})
+
+test('the preview overlay follows syncs of the store', async () => {
+  const {store, openForks, preview, titles} = await previewStore()
+  try {
+    const first = await preview('page', 'First')
+    expect(await titles(first)).toEqual({
+      page: 'First',
+      other: 'Published',
+      third: 'Published'
+    })
+    await store.mutate([
+      {
+        op: 'update',
+        id: 'other',
+        locale: null,
+        status: 'published',
+        set: {title: 'Updated'}
+      }
+    ])
+    const filePath = await store.get({id: 'third', select: Entry.filePath})
+    const tx = await transaction(store.source)
+    const removed = await tx.remove(filePath).compile()
+    await store.source.applyChanges({
+      fromSha: removed.from.sha,
+      changes: removed.changes
+    })
+    await store.sync()
+    expect(await titles(first)).toEqual({page: 'First', other: 'Updated'})
+    expect(openForks()).toHaveLength(1)
+  } finally {
+    await store.close()
+  }
+})
+
+test('previews switch over a store sourced from its own database', async () => {
+  const {store, preview} = await previewStore()
+  // Like a generated database: the source reads the rows being previewed.
+  const generated = sourcedFromDatabase(store)
+  const title = (previewed: Entry) =>
+    generated.get({
+      id: previewed.id,
+      select: Entry.title,
+      preview: {entry: previewed}
+    })
+  try {
+    const first = await preview('page', 'First')
+    const other = await preview('other', 'Other')
+    for (const previewed of [first, other, first, other])
+      expect(await title(previewed)).toBe(previewed.title)
+  } finally {
+    await generated.close()
+    await store.close()
+  }
+})
+
+test('previews moving an entry match fresh overlays', async () => {
+  const {store, openForks, preview, rows} = await previewStore()
+  try {
+    const payloads = [
+      await preview('page', 'First'),
+      await preview('page', 'Moved', 'moved'),
+      await preview('page', 'Restored'),
+      await preview('other', 'Other')
+    ]
+    expect(payloads[1].filePath).not.toBe(payloads[0].filePath)
+    for (const previewed of payloads)
+      expect(await rows(store, previewed)).toEqual(
+        await referenceRows(store, previewed, rows)
+      )
+    expect(openForks()).toHaveLength(1)
+  } finally {
+    await store.close()
+  }
+})
+
+test('previews of a database that cannot fork roll back', async () => {
+  const {store, preview, rows} = await previewStore(false)
+  try {
+    expect(store.database.forkable).toBe(false)
+    const published = await rows(store)
+    const payloads = [
+      await preview('page', 'First'),
+      await preview('page', 'Moved', 'moved'),
+      await preview('other', 'Other')
+    ]
+    for (const previewed of payloads) {
+      const found = await rows(store, previewed)
+      const others = (list: typeof found) =>
+        list.filter(row => row.id !== previewed.id)
+      expect(found).toContainEqual({
+        id: previewed.id,
+        path: previewed.path,
+        filePath: previewed.filePath,
+        title: previewed.title
+      })
+      expect(others(found)).toEqual(others(published))
+    }
+    expect(await rows(store)).toEqual(published)
+  } finally {
+    await store.close()
+  }
+})
+
+test('previews leave out archived entries unless viewing one', async () => {
+  const {store} = await createForkableStore()
+  try {
+    await createPages(store, () => 'Published')
+    await store.mutate([
+      {
+        op: 'create',
+        id: 'page',
+        type: 'Page',
+        locale: null,
+        data: {title: 'Draft'},
+        status: 'draft'
+      },
+      {
+        op: 'update',
+        id: 'other',
+        locale: null,
+        status: 'published',
+        set: {title: 'Archived'}
+      },
+      {op: 'archive', id: 'other', locale: null},
+      {
+        op: 'create',
+        id: 'unpublished',
+        type: 'Page',
+        locale: null,
+        data: {title: 'Unpublished'},
+        status: 'draft'
+      }
+    ])
+    const titles = async (previewed?: Entry) =>
+      (
+        await store.find({
+          status: 'preview',
+          select: Entry.title,
+          preview: previewed && {entry: previewed}
+        })
+      ).sort()
+    expect(await titles()).toEqual(['Draft', 'Published', 'Unpublished'])
+    // Viewing an archived entry previews it as published
+    const archived = await store.get({
+      id: 'other',
+      select: Entry,
+      status: 'archived'
+    })
+    expect(await titles(archived)).toEqual([
+      'Archived',
+      'Draft',
+      'Published',
+      'Unpublished'
+    ])
+  } finally {
+    await store.close()
+  }
+})
+
+/** Rows of a preview through an overlay created for it alone. */
+async function referenceRows<Row>(
+  store: EntryStore,
+  previewed: Entry,
+  rows: (target: EntryStore, previewed?: Entry) => Promise<Row>
+): Promise<Row> {
+  const reference = new EntryStore(config, store.database, store.source)
+  try {
+    return await rows(reference, previewed)
+  } finally {
+    await reference.close()
+  }
+}
+
+test('seed translations share an index when locale siblings differ', async () => {
+  const Seeded = ConfigBuilder.document('Seeded', {fields: {}})
+  function seededConfig(includeSeed: boolean): Config {
+    return {
+      schema: {Seeded},
+      workspaces: {
+        main: ConfigBuilder.workspace('Main', {
+          source: 'content',
+          roots: {
+            pages: ConfigBuilder.root('Pages', {
+              i18n: {locales: ['en', 'fr']},
+              children: includeSeed
+                ? {home: ConfigBuilder.page({type: Seeded})}
+                : undefined
+            })
+          }
+        })
+      }
+    }
+  }
+
+  const source = new MemorySource()
+  const initial = await createStore(source, seededConfig(false))
+  await initial.store.sync()
+  await initial.store.mutate([
+    {
+      op: 'create',
+      id: 'english-page',
+      type: 'Seeded',
+      locale: 'en',
+      data: {title: 'English page'}
+    },
+    {
+      op: 'create',
+      id: 'french-page-1',
+      type: 'Seeded',
+      locale: 'fr',
+      data: {title: 'French page 1'}
+    },
+    {
+      op: 'create',
+      id: 'french-page-2',
+      type: 'Seeded',
+      locale: 'fr',
+      data: {title: 'French page 2'}
+    }
+  ])
+  initial.sqlite.close()
+
+  const seeded = await createStore(source, seededConfig(true))
+  try {
+    await seeded.store.sync()
+    const rows = await seeded.store.find({
+      path: 'home',
+      status: 'all',
+      select: {id: Entry.id, index: Entry.index, locale: Entry.locale}
+    })
+    expect(rows).toHaveLength(2)
+    expect(new Set(rows.map(row => row.id)).size).toBe(1)
+    expect(new Set(rows.map(row => row.index)).size).toBe(1)
+  } finally {
+    seeded.sqlite.close()
+  }
+})
+
+test('entry store finds an existing seed by its seed identity', async () => {
+  const Seeded = ConfigBuilder.document('Seeded', {fields: {}})
+  const seededConfig: Config = {
+    schema: {Seeded},
+    workspaces: {
+      main: ConfigBuilder.workspace('Main', {
+        source: 'content',
+        roots: {
+          pages: ConfigBuilder.root('Pages', {
+            children: {home: ConfigBuilder.page({type: Seeded})}
+          })
+        }
+      })
+    }
+  }
+  const source = new MemorySource()
+  const initial = await createStore(source, seededConfig)
+  await initial.store.sync()
+  const original = await initial.store.get({
+    path: 'home',
+    select: {id: Entry.id, seeded: Entry.seeded}
+  })
+  expect(original.seeded).toBe('/home.json')
+  initial.sqlite.close()
+
+  const rename = await transaction(source)
+  const renamed = await rename
+    .rename('pages/home.json', 'pages/existing-home.json')
+    .compile()
+  await source.applyChanges({
+    fromSha: renamed.from.sha,
+    changes: renamed.changes
+  })
+
+  const reopened = await createStore(source, seededConfig)
+  try {
+    await reopened.store.sync()
+    const rows = await reopened.store.find({
+      seeded: '/home.json',
+      status: 'all',
+      select: {id: Entry.id, filePath: Entry.filePath}
+    })
+    expect(rows).toEqual([
+      {id: original.id, filePath: 'pages/existing-home.json'}
+    ])
+  } finally {
+    reopened.sqlite.close()
+  }
+})
+
+test('an entry whose seed was removed from the config is no longer seeded', async () => {
+  const Seeded = ConfigBuilder.document('Seeded', {fields: {}})
+  function seededConfig(includeSeed: boolean): Config {
+    return {
+      schema: {Seeded},
+      workspaces: {
+        main: ConfigBuilder.workspace('Main', {
+          source: 'content',
+          roots: {
+            pages: ConfigBuilder.root('Pages', {
+              contains: ['Seeded'],
+              children: includeSeed
+                ? {home: ConfigBuilder.page({type: Seeded})}
+                : {}
+            })
+          }
+        })
+      }
+    }
+  }
+  const source = new MemorySource()
+  const initial = await createStore(source, seededConfig(true))
+  await initial.store.sync()
+  const {id} = await initial.store.get({path: 'home', select: {id: Entry.id}})
+  initial.sqlite.close()
+
+  const unseeded = await createStore(source, seededConfig(false))
+  try {
+    await unseeded.store.sync()
+    const entry = await unseeded.store.get({
+      id,
+      select: {seeded: Entry.seeded, title: Entry.title}
+    })
+    expect(entry.seeded).toBeNull()
+    // Saving drops the stale marker from the file
+    await unseeded.store.mutate([
+      {
+        op: 'update',
+        id,
+        locale: null,
+        status: 'published',
+        set: {title: 'Home'}
+      }
+    ])
+    const sha = (await source.getTree()).getLeaf('pages/home.json').sha
+    let file: Uint8Array = new Uint8Array()
+    for await (const [, blob] of source.getBlobs([sha])) file = blob
+    const record = JSON.parse(new TextDecoder().decode(file))
+    expect(record._seeded).toBeUndefined()
+    await unseeded.store.mutate([{op: 'remove', id, locale: null}])
+    expect(await unseeded.store.find({id, select: Entry.id})).toEqual([])
+  } finally {
+    unseeded.sqlite.close()
+  }
+})
+
+test('SQLite seed defaults follow config changes without rewriting source', async () => {
+  const Seeded = ConfigBuilder.document('Seeded', {
+    fields: {rate: Field.number('Rate')}
+  })
+  function seededConfig(title: string, rate: number): Config {
+    return {
+      schema: {Seeded},
+      workspaces: {
+        main: ConfigBuilder.workspace('Main', {
+          source: 'content',
+          roots: {
+            pages: ConfigBuilder.root('Pages', {
+              children: {
+                vat: ConfigBuilder.page({
+                  type: Seeded,
+                  fields: {title, rate}
+                })
+              }
+            })
+          }
+        })
+      }
+    }
+  }
+  const source = new MemorySource()
+  const initial = await createStore(source, seededConfig('VAT', 6))
+  await initial.store.sync()
+  expect(await initial.store.get({path: 'vat', type: Seeded})).toMatchObject({
+    title: 'VAT',
+    rate: 6
+  })
+  initial.sqlite.close()
+
+  const changed = await createStore(source, seededConfig('BTW', 21))
+  try {
+    await changed.store.sync()
+    expect(await changed.store.get({path: 'vat', type: Seeded})).toMatchObject({
+      title: 'BTW',
+      rate: 21
+    })
+  } finally {
+    changed.sqlite.close()
+  }
+})
+
+test('mutations without an id are rejected without touching data', async () => {
+  const {sqlite, store} = await createStore()
+  try {
+    await store.mutate([
+      {
+        op: 'create',
+        id: 'page',
+        type: 'Page',
+        locale: null,
+        data: {title: 'Page'}
+      }
+    ])
+    const mutations = [
+      {
+        op: 'create',
+        id: undefined,
+        type: 'Page',
+        locale: null,
+        data: {title: 'Missing id'}
+      },
+      {op: 'remove', id: undefined},
+      {
+        op: 'update',
+        id: undefined,
+        locale: null,
+        status: 'published',
+        set: {title: 'Changed'}
+      },
+      {op: 'move', id: undefined, target: 'page', dropPosition: 'before'},
+      {op: 'publish', id: undefined, locale: null, status: 'draft'},
+      {op: 'unpublish', id: undefined, locale: null},
+      {op: 'archive', id: undefined, locale: null}
+    ] as unknown as Array<Mutation>
+    for (const mutation of mutations)
+      await expect(store.mutate([mutation])).rejects.toThrow('missing an id')
+    expect(await store.find({select: Entry.id})).toEqual(['page'])
+    expect(await store.get({id: 'page', select: Entry.title})).toBe('Page')
+  } finally {
+    sqlite.close()
+  }
+})

@@ -1,0 +1,89 @@
+import type {EntryLocaleAtoms} from '#/dashboard/atoms/entry.js'
+import {ReactiveNode} from '#/dashboard/atoms/ReactiveNode.js'
+import {atomWithPending} from '#/dashboard/atoms/utils.js'
+import {atom, useAtomValueRaw, useSetAtom} from 'jotai'
+import {useMemo} from 'react'
+import {EntrySidebarBrowserPreview} from './EntrySidebarPreview.js'
+
+const node = new ReactiveNode({title: 'Original title'})
+const previewUrlRequest = atom<Promise<string>>(
+  Promise.resolve('/preview-frame')
+)
+const localeData = {
+  previewPayloadSignal: atom(get => [get(node.value)]),
+  previewUrlState: atomWithPending(previewUrlRequest),
+  retryPreviewUrl: atom(null, () => {}),
+  updatePreviewPayload: atom(null, async get => {
+    const value = get(node.value)
+    if (value.title === 'Slow title')
+      await new Promise(resolve => setTimeout(resolve, 600))
+    return JSON.stringify({
+      ...value,
+      sha: 'preview-content-sha'
+    })
+  })
+} satisfies Pick<
+  EntryLocaleAtoms,
+  | 'previewPayloadSignal'
+  | 'previewUrlState'
+  | 'retryPreviewUrl'
+  | 'updatePreviewPayload'
+>
+const refreshPreviewUrl = atom(null, (_get, set) => {
+  set(
+    previewUrlRequest,
+    new Promise(resolve => {
+      setTimeout(() => resolve('/preview-frame'), 500)
+    })
+  )
+})
+
+function PreviewTitleField() {
+  const titleField = node.field('title')
+  const value = useAtomValueRaw(titleField)
+  const setValue = useSetAtom(titleField)
+  return (
+    <label>
+      Title
+      <input
+        aria-label="Title"
+        value={typeof value === 'string' ? value : ''}
+        onChange={event => setValue(event.currentTarget.value)}
+      />
+    </label>
+  )
+}
+
+function RefreshPreviewUrlButton() {
+  const refresh = useSetAtom(refreshPreviewUrl)
+  return <button onClick={() => refresh()}>Refresh preview URL</button>
+}
+
+interface EntrySidebarPreviewStoryProps {
+  previewUrl?: string
+  entryId?: string
+}
+
+export function EntrySidebarPreviewStory({
+  previewUrl,
+  entryId
+}: EntrySidebarPreviewStoryProps) {
+  const previewData = useMemo(
+    () =>
+      previewUrl
+        ? {
+            ...localeData,
+            entryId,
+            previewUrlState: atom([false, previewUrl] as const)
+          }
+        : localeData,
+    [previewUrl, entryId]
+  )
+  return (
+    <>
+      <PreviewTitleField />
+      <RefreshPreviewUrlButton />
+      <EntrySidebarBrowserPreview localeData={previewData} />
+    </>
+  )
+}

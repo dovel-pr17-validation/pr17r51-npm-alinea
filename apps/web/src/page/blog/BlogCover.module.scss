@@ -1,0 +1,48 @@
+@use '@/style' as *;
+
+.root {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+  padding: 22px 28px;
+  border-radius: 12px;
+  background: var(--web-accent);
+  // Text sits on the blue photo, which is the same in both themes
+  color: white;
+
+  &-image {
+    object-fit: cover;
+
+    &.is-flipped {
+      transform: scaleX(-1);
+    }
+  }
+
+  &-text {
+    position: relative;
+    font-family: var(--web-title-font);
+    font-weight: 500;
+    font-size: 40px;
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  &.is-post &-text {
+    font-size: 56px;
+
+    @include sm {
+      font-size: 40px;
+    }
+  }
+
+  &-fallback {
+    position: relative;
+    max-width: 360px;
+    font-family: var(--web-title-font);
+    font-weight: 500;
+    font-size: 26px;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+  }
+}

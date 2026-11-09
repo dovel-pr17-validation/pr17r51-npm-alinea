@@ -1,0 +1,56 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+
+  // The file name or "Terminal" sits above the block, not in a header bar
+  &-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-height: 20px;
+    font: var(--web-docs-font-code-label);
+    color: var(--web-foreground-muted);
+
+    &-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  &-body {
+    border-radius: var(--web-docs-radius);
+    background: var(--web-code-background);
+    color: var(--web-code-foreground);
+    overflow-x: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--web-outline-strong) transparent;
+  }
+
+  &-pre {
+    width: max-content;
+    min-width: 100%;
+    padding: 20px 22px;
+    font: var(--web-docs-font-code);
+  }
+
+  &-code {
+    font-family: inherit;
+  }
+
+  &-line {
+    &.is-prompt:not(:empty)::before {
+      content: '$ ';
+      color: var(--web-code-comment);
+      user-select: none;
+    }
+  }
+
+  &.is-compact &-pre {
+    padding-block: 16px;
+    line-height: 1.6;
+  }
+}

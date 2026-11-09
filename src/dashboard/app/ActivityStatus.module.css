@@ -1,0 +1,61 @@
+.ActivityStatus {
+  border: 0;
+  flex: 0 0 auto;
+  color: var(--alinea-fg-muted);
+}
+
+.ActivityStatus.is-syncing {
+  color: var(--alinea-fg);
+}
+
+.ActivityStatus.is-failed {
+  color: var(--alinea-danger);
+}
+
+.ActivityStatus-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.ActivityStatus-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 28px;
+  min-height: 16px;
+}
+
+.ActivityStatus-popover {
+  width: 320px;
+  max-width: calc(100vw - 32px);
+}
+
+/* Outranks the padding and shadow of the popover surface */
+.ActivityStatus-popover-surface[data-slot] {
+  overflow: hidden;
+  padding: 0;
+  background: var(--alinea-bg);
+  box-shadow: var(--alinea-shadow-tooltip);
+}
+
+.ActivityStatus-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--alinea-border);
+}
+
+.ActivityStatus-popover-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ActivityStatus-popover-list {
+  max-height: 280px;
+  overflow: auto;
+}

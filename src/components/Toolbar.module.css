@@ -1,0 +1,35 @@
+.Toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+
+  &[data-orientation='vertical'] {
+    flex-direction: column;
+    align-items: start;
+  }
+}
+
+.ToolbarGroup {
+  display: flex;
+  gap: 4px;
+
+  .Toolbar[data-orientation='vertical'] & {
+    flex-direction: column;
+  }
+}
+
+.ToolbarSeparator {
+  flex-shrink: 0;
+  margin: 4px 0;
+  border: none;
+  border-right: 1px solid var(--alinea-border);
+  height: 1rem;
+
+  &[data-orientation='horizontal'] {
+    margin: 0 4px;
+    border-right: none;
+    border-bottom: 1px solid var(--alinea-border);
+    width: 1rem;
+    height: 0;
+  }
+}

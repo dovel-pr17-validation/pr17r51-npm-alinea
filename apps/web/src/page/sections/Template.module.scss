@@ -1,0 +1,145 @@
+@use '@/style' as *;
+
+.root {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 96px;
+  align-items: center;
+
+  &.is-image {
+    grid-template-columns: 640px minmax(0, 1fr);
+  }
+
+  &.is-image.is-right {
+    grid-template-columns: minmax(0, 1fr) 640px;
+  }
+
+  @media (max-width: 1199.999px) {
+    gap: 64px;
+
+    &.is-image,
+    &.is-image.is-right {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @include sm {
+    gap: 40px;
+
+    &.is-image,
+    &.is-image.is-right {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  &-media {
+    position: relative;
+    height: 440px;
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--web-surface-soft);
+
+    @include sm {
+      height: auto;
+      aspect-ratio: 16 / 11;
+    }
+  }
+
+  &.is-right &-media {
+    order: 2;
+
+    @include sm {
+      order: 0;
+    }
+  }
+
+  &-image {
+    object-fit: cover;
+    object-position: top left;
+  }
+
+  &-content {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  &-title {
+    margin: 0;
+    font-family: var(--web-title-font);
+    font-weight: 500;
+    font-size: 32px;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    color: var(--web-foreground);
+
+    @include s {
+      font-size: 26px;
+    }
+  }
+
+  &-description {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  &-text {
+    margin: 0;
+    font-size: 17px;
+    line-height: 1.6;
+    color: var(--web-foreground-faded);
+  }
+
+  &-link {
+    font-weight: 500;
+    color: var(--web-accent);
+
+    &:is(:hover, :focus-visible) {
+      color: var(--web-accent-strong);
+    }
+  }
+
+  &-checks {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 8px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  &-check {
+    position: relative;
+    padding-left: 26px;
+    font-size: 16px;
+    line-height: 1.5;
+    color: var(--web-foreground);
+
+    &::before {
+      content: '';
+      position: absolute;
+      left: 0;
+      top: 5px;
+      width: 14px;
+      height: 14px;
+      background: var(--web-accent);
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+    }
+  }
+
+  // Paragraphs inside list items take the list item styling
+  &-check &-text {
+    font-size: inherit;
+    line-height: inherit;
+    color: inherit;
+  }
+
+  &-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 16px;
+  }
+}

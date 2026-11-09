@@ -1,0 +1,39 @@
+.TooltipContent {
+  max-width: 200px;
+  padding: 4px 8px;
+  border-radius: var(--alinea-radius-sm);
+  background: var(--alinea-primary);
+  color: var(--alinea-primary-fg);
+  box-shadow: var(--alinea-shadow-tooltip);
+  font-size: var(--alinea-font-size-base);
+  line-height: 1.4;
+  forced-color-adjust: none;
+  outline: none;
+  opacity: 1;
+  transition: opacity var(--alinea-transition);
+
+  @starting-style {
+    opacity: 0;
+  }
+}
+
+.TooltipContent-arrow {
+  display: block;
+}
+
+.TooltipContent-arrow-icon {
+  display: block;
+  fill: var(--alinea-primary);
+
+  &[data-side='bottom'] {
+    transform: rotate(180deg);
+  }
+
+  &[data-side='right'] {
+    transform: rotate(90deg);
+  }
+
+  &[data-side='left'] {
+    transform: rotate(-90deg);
+  }
+}

@@ -1,0 +1,34 @@
+import type {FieldOptions, WithoutLabel} from '#/core.js'
+import {ScalarField} from '#/core/field/ScalarField.js'
+import {viewKeys} from '#/dashboard/ViewKeys.js'
+import type {ReactNode} from 'react'
+
+/** Optional settings to configure a time field */
+export interface TimeOptions extends FieldOptions<string> {
+  /** Width of the field in the dashboard UI (0-1) */
+  width?: number
+  /** Add instructional text to a field */
+  help?: ReactNode
+  /** Display a minimal version */
+  inline?: boolean
+  /** Focus this input automatically */
+  autoFocus?: boolean
+  /** A minimum value */
+  minValue?: string
+  /** A maximum value */
+  maxValue?: string
+}
+
+/** Internal representation of a date field */
+export class TimeField extends ScalarField<string, TimeOptions> {}
+
+/** Create a time field configuration */
+export function time(
+  label: string,
+  options: WithoutLabel<TimeOptions> = {}
+): TimeField {
+  return new TimeField({
+    options: {label, overview: true, ...options},
+    view: viewKeys.TimeInput
+  })
+}

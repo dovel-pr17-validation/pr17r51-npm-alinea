@@ -1,0 +1,115 @@
+import {createId} from '#/core/Id.js'
+import {Reference} from '#/core/Reference.js'
+import {EntryReference} from '#/picker/entry/EntryReference.js'
+import {UrlReference} from '#/picker/url.js'
+import type {HTMLProps} from 'react'
+
+interface Anchor extends HTMLProps<HTMLAnchorElement> {
+  _id?: string
+  _entry?: string
+  _locale?: string
+  _link?: 'entry' | 'file' | 'image' | 'url'
+  'data-id'?: string
+  'data-entry'?: string
+  'data-locale'?: string
+  'data-anchor'?: string
+  'data-link'?: 'entry' | 'file' | 'image' | 'url'
+  'data-suffix'?: string
+}
+
+export function referenceToAttributes(reference: Reference): Anchor {
+  // Todo: don't stringly type here
+  switch (reference[Reference.type]) {
+    case 'url': {
+      const ref = reference as UrlReference
+      return {
+        'data-id': ref[Reference.id],
+        'data-entry': undefined,
+        'data-locale': undefined,
+        'data-anchor': undefined,
+        'data-link': 'url',
+        href: ref._url,
+        target: ref._target
+      }
+    }
+    case 'entry': {
+      const ref = reference as EntryReference
+      return {
+        'data-id': ref[Reference.id],
+        'data-entry': ref[EntryReference.entry],
+        'data-locale': ref[EntryReference.locale],
+        'data-anchor': ref[EntryReference.anchor],
+        'data-link': 'entry',
+        'data-suffix': ref._suffix,
+        href: undefined,
+        target: undefined
+      }
+    }
+    case 'file': {
+      const ref = reference as EntryReference
+      return {
+        'data-id': ref[Reference.id],
+        'data-entry': ref[EntryReference.entry],
+        'data-locale': undefined,
+        'data-anchor': undefined,
+        'data-link': 'file',
+        'data-suffix': undefined,
+        href: undefined,
+        target: undefined
+      }
+    }
+    case 'image': {
+      const ref = reference as EntryReference
+      return {
+        'data-id': ref[Reference.id],
+        'data-entry': ref[EntryReference.entry],
+        'data-locale': undefined,
+        'data-anchor': undefined,
+        'data-link': 'image',
+        'data-suffix': undefined,
+        href: undefined,
+        target: undefined
+      }
+    }
+    default:
+      throw new Error(`Unexpected reference type: ${reference[Reference.type]}`)
+  }
+}
+
+export function attributesToReference(
+  attributes: Anchor
+): Reference | undefined {
+  const id = attributes['data-id'] ?? attributes._id
+  const entry = attributes['data-entry'] ?? attributes._entry
+  const link = attributes['data-link'] ?? attributes._link
+  if (!id) {
+    if (attributes.href)
+      return {
+        [Reference.id]: createId(),
+        [Reference.type]: 'url',
+        [UrlReference.url]: attributes.href,
+        [UrlReference.target]: attributes.target
+      } as UrlReference
+    return
+  }
+  if (entry) {
+    const type = link === 'file' ? 'file' : link === 'image' ? 'image' : 'entry'
+    return {
+      [Reference.id]: id,
+      [Reference.type]: type,
+      [EntryReference.entry]: entry,
+      [EntryReference.locale]:
+        type === 'entry' ? attributes['data-locale'] : undefined,
+      [EntryReference.anchor]:
+        type === 'entry' ? attributes['data-anchor'] : undefined,
+      [EntryReference.suffix]:
+        type === 'entry' ? attributes['data-suffix'] : undefined
+    } as EntryReference
+  }
+  return {
+    [Reference.id]: id,
+    [Reference.type]: 'url',
+    [UrlReference.url]: attributes.href,
+    [UrlReference.target]: attributes.target
+  } as UrlReference
+}

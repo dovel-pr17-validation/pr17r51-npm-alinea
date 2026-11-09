@@ -1,0 +1,28 @@
+@use '@/style' as *;
+
+.root {
+  position: sticky;
+  top: var(--web-header-height);
+  flex-shrink: 0;
+  align-self: flex-start;
+  // 216px of links, with room on both sides for their focus ring
+  width: 224px;
+  height: calc(100dvh - var(--web-header-height));
+  margin-inline: -4px;
+  padding: 56px 4px 64px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.2s ease-out;
+
+  &:hover,
+  &:focus-within {
+    scrollbar-color: color-mix(in srgb, var(--web-foreground) 18%, transparent)
+      transparent;
+  }
+
+  @include sm {
+    display: none;
+  }
+}

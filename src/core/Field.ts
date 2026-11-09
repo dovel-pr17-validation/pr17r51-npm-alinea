@@ -1,0 +1,354 @@
+import type {
+  EntryReferenceTarget,
+  FieldReferenceContext
+} from '#/core/db/EntryReference.js'
+import type {LinkResolver} from '#/core/db/LinkResolver.js'
+import {Expr} from './Expr.js'
+import type {RootI18n} from './Root.js'
+import type {Type} from './Type.js'
+import {type HasField, getField, hasField, internalField} from './Internal.js'
+import type {User} from './User.js'
+import {isEmptyValue} from './util/Objects.js'
+import type {
+  FieldValidationContext,
+  FieldValidationError
+} from './Validation.js'
+import type {View} from './View.js'
+
+export interface FieldOptions<StoredValue> {
+  /** A description of the field */
+  label: string
+  /** Hide this field in the dashboard */
+  hidden?: boolean
+  /**
+   * Display this field in overview listings
+   * @deprecated Define the columns on the parent with `overview.columns`.
+   * Still used as columns when the parent defines none.
+   */
+  overview?: boolean
+  /** Mark this field as read-only */
+  readOnly?: boolean
+  /** The initial value of the field */
+  initialValue?: StoredValue
+  /** The value of this field is shared across all languages */
+  shared?: boolean
+  /** Providing a value for this field is required */
+  required?: boolean
+  /** Validate the given value */
+  validate?(value: StoredValue): boolean | string | undefined
+  /**
+   * The width of the field in the entry form, a fraction between 0 and 1.
+   * Fields that fit next to each other share a row.
+   */
+  width?: number
+}
+
+export interface EntryAnchorTarget {
+  id: string
+  fieldPath: string
+  fieldLabel?: string
+  label?: string
+}
+
+export interface FieldAnchorContext {
+  anchors: Set<string>
+}
+
+/** Where a value is edited or created, for fields that depend on its root */
+export interface FieldInitialContext {
+  /** The locales of a root that translates fields, see `Field.localised` */
+  fieldI18n?: RootI18n
+}
+
+export interface FieldLocalizeContext {
+  locale: string
+  entryIds: Set<string>
+}
+
+export type WithoutLabel<Options extends FieldOptions<any>> = Omit<
+  Options,
+  'label'
+>
+
+export interface FieldMeta<StoredValue, QueryValue, Mutator, Options> {
+  options: Options & FieldOptions<StoredValue>
+  view: View<{
+    field: Field<StoredValue, QueryValue, Mutator, Options>
+  }>
+  compactView?: View<{
+    field: Field<StoredValue, QueryValue, Mutator, Options>
+    value: StoredValue
+  }>
+  queryValue?: (value: StoredValue, loader: LinkResolver) => Promise<QueryValue>
+  references?: (
+    value: StoredValue,
+    context: FieldReferenceContext
+  ) => Array<EntryReferenceTarget>
+  anchors?: (
+    value: StoredValue,
+    context: FieldReferenceContext
+  ) => Array<EntryAnchorTarget>
+  normalizeAnchors?: (
+    value: StoredValue,
+    context: FieldAnchorContext
+  ) => StoredValue
+  /** Point entry links to entryIds at the given locale */
+  localizeLinks?: (
+    value: StoredValue,
+    context: FieldLocalizeContext
+  ) => StoredValue
+  beforeSave?: (context: FieldBeforeSaveContext<StoredValue>) => StoredValue
+}
+
+export type FieldBeforeSaveAction =
+  | 'create'
+  | 'update'
+  | 'publish'
+  | 'translate'
+
+export interface FieldBeforeSaveContext<StoredValue> {
+  value: StoredValue
+  action: FieldBeforeSaveAction
+  user?: User | null
+  now: Date
+}
+
+export interface FieldData<
+  StoredValue,
+  QueryValue,
+  Mutator,
+  Options
+> extends FieldMeta<StoredValue, QueryValue, Mutator, Options> {
+  referencedViews?: Array<string>
+  /** The types of the values nested in this field: list rows, blocks, ... */
+  nestedTypes?: Array<Type>
+  defaultValue?: () => StoredValue
+  withInitialValue?: (
+    value: StoredValue,
+    context?: FieldInitialContext
+  ) => StoredValue
+  applyLinks?: (value: StoredValue, loader: LinkResolver) => Promise<void>
+  searchableText?: (value: StoredValue) => string
+  /** Whether the value counts as missing for the `required` option */
+  isEmpty?: (value: StoredValue) => boolean
+  /** Validate fields nested in the value (list rows, object fields, blocks) */
+  nestedErrors?: (
+    value: StoredValue,
+    context: FieldValidationContext
+  ) => Array<FieldValidationError>
+  /**
+   * Validate a field that holds several values of another field, such as one
+   * per locale. Replaces the field's own checks: its required, min, max and
+   * validate options apply to each of the values instead.
+   */
+  valueErrors?: (
+    value: StoredValue,
+    options: FieldOptions<unknown>,
+    context: FieldValidationContext
+  ) => Array<FieldValidationError>
+}
+
+export interface FieldInternal extends FieldData<any, any, any, any> {
+  ref: symbol
+}
+
+declare const brand: unique symbol
+export class Field<
+  StoredValue = any,
+  QueryValue = any,
+  Mutator = any,
+  Options = any
+>
+  extends Expr<QueryValue>
+  implements HasField
+{
+  declare [brand]: [StoredValue, QueryValue, Mutator, Options];
+
+  [internalField]: FieldInternal
+  constructor(data: FieldData<StoredValue, QueryValue, Mutator, Options>) {
+    super({type: 'field'})
+    this[internalField] = {ref: Symbol(), ...data}
+  }
+}
+
+export namespace Field {
+  // Todo: because we wrap fields in an Expr proxy we need this
+  // reference - but maybe we shouldn't wrap in the future
+  export function ref(field: HasField): symbol {
+    return getField(field).ref
+  }
+
+  export function label(field: HasField): string {
+    return getField(field).options.label
+  }
+
+  export function initialValue(field: HasField): unknown {
+    const data = getField(field)
+    if ('initialValue' in data.options) return data.options.initialValue
+    return data.defaultValue?.()
+  }
+
+  export function withInitialValue<StoredValue>(
+    field: HasField,
+    value: StoredValue,
+    context?: FieldInitialContext
+  ): StoredValue {
+    return getField(field).withInitialValue?.(value, context) ?? value
+  }
+
+  /** The types of the values nested in a field, such as list rows */
+  export function nestedTypes(field: HasField): Array<Type> {
+    return getField(field).nestedTypes ?? []
+  }
+
+  export function view<
+    StoredValue,
+    QueryValue,
+    Mutator,
+    Options extends FieldOptions<StoredValue>
+  >(
+    field: Field<StoredValue, QueryValue, Mutator, Options>
+  ): View<{
+    field: Field<StoredValue, QueryValue, Mutator, Options>
+  }> {
+    return getField(field).view
+  }
+
+  export function referencedViews(field: Field): Array<string> {
+    const fieldView = Field.view(field)
+    const compactView = Field.compactView(field)
+    return [
+      typeof fieldView === 'string' ? fieldView : undefined,
+      typeof compactView === 'string' ? compactView : undefined,
+      ...(getField(field).referencedViews ?? [])
+    ].filter((view): view is string => typeof view === 'string')
+  }
+
+  export function compactView<
+    StoredValue,
+    QueryValue,
+    Mutator,
+    Options extends FieldOptions<StoredValue>
+  >(
+    field: Field<StoredValue, QueryValue, Mutator, Options>
+  ):
+    | View<{
+        field: Field<StoredValue, QueryValue, Mutator, Options>
+        value: StoredValue
+      }>
+    | undefined {
+    return getField(field).compactView
+  }
+
+  export function options<
+    StoredValue,
+    QueryValue,
+    Options extends FieldOptions<StoredValue>
+  >(field: Field<StoredValue, QueryValue, any, Options>): Options {
+    return getField(field).options
+  }
+
+  export async function queryValue<StoredValue, QueryValue, Mutator, Options>(
+    field: Field<StoredValue, QueryValue, Mutator, Options>,
+    value: StoredValue,
+    loader: LinkResolver
+  ): Promise<QueryValue> {
+    const data = getField(field)
+    if (data.queryValue) return data.queryValue(value, loader)
+    if (data.applyLinks) await data.applyLinks(value, loader)
+    return value as unknown as QueryValue
+  }
+
+  export function beforeSave<StoredValue, QueryValue, Mutator, Options>(
+    field: Field<StoredValue, QueryValue, Mutator, Options>,
+    value: StoredValue,
+    context: Omit<FieldBeforeSaveContext<StoredValue>, 'value'>
+  ): StoredValue {
+    const data = getField(field)
+    if (!data.beforeSave) return value
+    return data.beforeSave({...context, value})
+  }
+
+  export async function applyLinks<StoredValue, QueryValue, Mutator, Options>(
+    field: Field<StoredValue, QueryValue, Mutator, Options>,
+    value: StoredValue,
+    loader: LinkResolver
+  ): Promise<void> {
+    const data = getField(field)
+    if (data.applyLinks) await data.applyLinks(value, loader)
+  }
+
+  export function searchableText<StoredValue, QueryValue, Mutator, Options>(
+    field: Field<StoredValue, QueryValue, Mutator, Options>,
+    value: StoredValue
+  ): string {
+    const data = getField(field)
+    return data.searchableText?.(value) ?? ''
+  }
+
+  export function isEmpty(field: HasField, value: unknown): boolean {
+    const data = getField(field)
+    if (data.isEmpty) return data.isEmpty(value)
+    return isEmptyValue(value)
+  }
+
+  export function nestedErrors(
+    field: HasField,
+    value: unknown,
+    context: FieldValidationContext
+  ): Array<FieldValidationError> {
+    return getField(field).nestedErrors?.(value, context) ?? []
+  }
+
+  /** Errors of a field holding several values, undefined for other fields */
+  export function valueErrors(
+    field: HasField,
+    value: unknown,
+    options: FieldOptions<unknown>,
+    context: FieldValidationContext
+  ): Array<FieldValidationError> | undefined {
+    return getField(field).valueErrors?.(value, options, context)
+  }
+
+  export function hasValueErrors(field: HasField): boolean {
+    return Boolean(getField(field).valueErrors)
+  }
+
+  export function references<StoredValue, QueryValue, Mutator, Options>(
+    field: Field<StoredValue, QueryValue, Mutator, Options>,
+    value: StoredValue,
+    context: FieldReferenceContext
+  ): Array<EntryReferenceTarget> {
+    const data = getField(field)
+    return data.references?.(value, context) ?? []
+  }
+
+  export function anchors<StoredValue, QueryValue, Mutator, Options>(
+    field: Field<StoredValue, QueryValue, Mutator, Options>,
+    value: StoredValue,
+    context: FieldReferenceContext
+  ): Array<EntryAnchorTarget> {
+    const data = getField(field)
+    return data.anchors?.(value, context) ?? []
+  }
+
+  export function normalizeAnchors<StoredValue>(
+    field: HasField,
+    value: StoredValue,
+    context: FieldAnchorContext
+  ): StoredValue {
+    return getField(field).normalizeAnchors?.(value, context) ?? value
+  }
+
+  export function localizeLinks<StoredValue>(
+    field: HasField,
+    value: StoredValue,
+    context: FieldLocalizeContext
+  ): StoredValue {
+    return getField(field).localizeLinks?.(value, context) ?? value
+  }
+
+  export function isField(value: any): value is Field {
+    return value && hasField(value)
+  }
+}

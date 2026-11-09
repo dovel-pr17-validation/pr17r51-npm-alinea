@@ -1,0 +1,725 @@
+import type {Config} from '#/core/Config.js'
+import {getWorkspace} from '#/core/Internal.js'
+import {Root} from '#/core/Root.js'
+import {Entry as EntryExpressions} from '#/core/Entry.js'
+import {EntryFields} from '#/core/EntryFields.js'
+import type {Expr} from '#/core/Expr.js'
+import type {Field} from '#/core/Field.js'
+import type {RelationCondition} from '#/core/Filter.js'
+import type {EdgeQuery, GraphQuery, Status} from '#/core/Graph.js'
+import {
+  getExpr,
+  hasExpr,
+  hasField,
+  hasRoot,
+  hasWorkspace
+} from '#/core/Internal.js'
+import {getScope, type Entity, type Scope} from '#/core/Scope.js'
+import type {Type} from '#/core/Type.js'
+import {entries, isRecord} from '#/core/util/Objects.js'
+import {LinksField} from '#/field/link/LinkField.js'
+import {
+  alias,
+  and,
+  asc,
+  Builder,
+  count,
+  desc,
+  eq,
+  exists,
+  getSql,
+  getQuery,
+  inArray,
+  include,
+  isNull,
+  ne,
+  or,
+  sql,
+  when,
+  type DriverSpecs,
+  type HasSql,
+  type SelectionInput,
+  type SelectionRecord,
+  type Sql
+} from 'rado'
+import {
+  EntryIndexTable,
+  EntryReferenceTable,
+  isOrderedField,
+  orderedMetadata,
+  storedEntryData,
+  type EntryIndexTarget
+} from '../entry/EntryTable.js'
+import {
+  arrayIncludes,
+  compileCondition,
+  compileFilter,
+  jsonField
+} from './Condition.js'
+import {searchableText, searchQuery} from './Search.js'
+
+import {
+  linkRelation,
+  referencedByCondition,
+  relationCondition
+} from './Relation.js'
+
+const builder = new Builder()
+
+/** Read a selected JSON path; SQLite's -> yields SQL null only when absent. */
+function readJson(value: unknown, specs: DriverSpecs): unknown {
+  if (value === null) return undefined
+  return specs.parsesJson ? value : JSON.parse(String(value))
+}
+
+interface RelationProjection {
+  path: Array<string>
+  plan: ProjectionPlan
+}
+
+interface FieldProjection {
+  path: Array<string>
+  field: Field
+}
+
+export interface ProjectionPlan {
+  count: boolean
+  single: boolean
+  /** Rows carry the selection as `value`, next to the columns they need. */
+  wrapped: boolean
+  /** The locale the query asked for, for rows of untranslated entries */
+  locale: string | null
+  relations: Array<RelationProjection>
+  fields: Array<FieldProjection>
+}
+
+interface CompiledRelation {
+  selection: SelectionInput
+  plan: ProjectionPlan
+}
+
+/** Expressions over a complete entry row. */
+class Expressions {
+  relations: Array<RelationProjection> = []
+  fields: Array<FieldProjection> = []
+  #scope: Scope
+  #search: ReturnType<typeof searchQuery>
+  #entry: EntryIndexTarget
+  #relation?: (query: EdgeQuery) => CompiledRelation
+  #scalar?: (query: EdgeQuery) => HasSql
+
+  constructor(
+    scope: Scope,
+    entry: EntryIndexTarget,
+    search: ReturnType<typeof searchQuery> | undefined,
+    relation?: (query: EdgeQuery) => CompiledRelation,
+    scalar?: (query: EdgeQuery) => HasSql
+  ) {
+    this.#scope = scope
+    this.#entry = entry
+    this.#search = search
+    this.#relation = relation
+    this.#scalar = scalar
+  }
+
+  /** A stored value; selected, an absent key reads as undefined. */
+  data(path: Array<string>, selecting = false): HasSql {
+    const stored = jsonField(this.#entry.data, path)
+    if (path.length === 1 && path[0] === 'path')
+      return sql`coalesce(${stored}, ${this.#entry.path})`
+    if (!selecting) return stored
+    return getSql(stored).forSelection().mapWith({mapFromDriverValue: readJson})
+  }
+
+  index(name: string, path?: Array<string>, selecting = false): HasSql {
+    if (path) return this.data([...path, name], selecting)
+    if (name === 'searchableText') {
+      const text = searchableText(this.#entry)
+      // Relations select fields by name.
+      return selecting ? text.as(name) : text
+    }
+    // Filters match entries another entry links to with `_referenced`
+    if (name === 'referenced')
+      return exists(
+        builder
+          .select(sql.value(1))
+          .from(EntryReferenceTable)
+          .where(eq(EntryReferenceTable.targetId, this.#entry.id))
+      )
+    if (Object.hasOwn(this.#entry, name))
+      return this.#entry[name as keyof EntryIndexTarget] as HasSql
+    const expr = EntryExpressions[name as keyof typeof EntryExpressions]
+    if (expr) {
+      const internal = getExpr(expr)
+      if (internal.type === 'entryField' && internal.path)
+        return this.data([...internal.path, name])
+    }
+    throw new Error(`Unsupported SQL entry field: ${name}`)
+  }
+
+  field(name: string): HasSql {
+    return name.startsWith('_') ? this.index(name.slice(1)) : this.data([name])
+  }
+
+  selection(name: string, path?: Array<string>): HasSql {
+    if (name === 'data')
+      return sql`json_set(
+        ${this.#entry.data}, '$.path',
+        coalesce(json_extract(${this.#entry.data}, '$.path'), ${this.#entry.path})
+      )`
+        .forSelection()
+        .mapWith({mapFromDriverValue: value => storedEntryData(value, '')})
+    const field = getSql(this.index(name, path, true))
+    if (name !== 'aliases') return field
+    return field.mapWith({
+      mapFromDriverValue(value, specs) {
+        const aliases = readJson(value, specs)
+        return Array.isArray(aliases) ? aliases : undefined
+      }
+    })
+  }
+
+  expr(expression: Expr, selecting = false): HasSql {
+    const internal = getExpr(expression)
+    switch (internal.type) {
+      case 'entryField':
+        return selecting
+          ? this.selection(internal.name, internal.path)
+          : this.index(internal.name, internal.path)
+      case 'field': {
+        const path = this.#scope.dataPathOf(expression as Field)
+        if (!path)
+          throw new Error('Field expression is not in the configured schema')
+        return this.data(path, selecting)
+      }
+      case 'value':
+        return sql.value(internal.value)
+      case 'relation': {
+        if (!this.#scalar)
+          throw new Error('Relation expressions are not supported here')
+        return this.#scalar(internal.query)
+      }
+      case 'typeSwitch': {
+        const branches = Object.entries(internal.cases).map(
+          ([type, inner]) =>
+            sql`when ${this.#entry.type} = ${sql.value(type)} then ${this.expr(inner)}`
+        )
+        return branches.length
+          ? sql`(case ${sql.join(branches, sql` `)} end)`
+          : sql`null`
+      }
+      case 'call': {
+        if (internal.method !== 'snippet')
+          throw new Error(`Unsupported SQL function: ${internal.method}`)
+        if (!this.#search)
+          throw new Error('Snippet method requires search terms to be provided')
+        const [start, end, cutOff, limit] = internal.args
+        if (!start || !end || !cutOff || !limit)
+          throw new Error('Snippet requires four arguments')
+        const value = getExpr(limit)
+        if (
+          value.type !== 'value' ||
+          !Number.isInteger(value.value) ||
+          typeof value.value !== 'number' ||
+          value.value <= 0 ||
+          value.value > 64
+        )
+          throw new Error('Snippet limit must be an integer from 1 to 64')
+        return this.#search.snippet(
+          this.expr(start),
+          this.expr(end),
+          this.expr(cutOff),
+          this.expr(limit)
+        )
+      }
+    }
+  }
+
+  projection(value: unknown, path: Array<string> = []): SelectionInput {
+    if (isRecord(value) && hasExpr(value)) {
+      if (hasField(value)) this.fields.push({path, field: value as Field})
+      return this.expr(value as Expr, true)
+    }
+    if (!isRecord(value)) throw new Error('Invalid SQL projection')
+    if ('edge' in value) {
+      if (!this.#relation)
+        throw new Error('Relations cannot be used as query conditions')
+      const relation = this.#relation(value as unknown as EdgeQuery)
+      this.relations.push({path, plan: relation.plan})
+      return relation.selection
+    }
+    const result: SelectionRecord = {}
+    for (const [key, nested] of Object.entries(value))
+      result[key] = this.projection(nested, [...path, key])
+    return result
+  }
+}
+
+/** Rows visible under a query status; the default addresses published rows. */
+export function statusCondition(
+  entry: EntryIndexTarget,
+  status: Status = 'published'
+): Sql<boolean> {
+  switch (status) {
+    case 'all':
+      return sql.value(true)
+    case 'preferDraft':
+      return eq(entry.active, true)
+    case 'preview':
+      return and(eq(entry.active, true), ne(entry.status, 'archived'))
+    case 'preferPublished':
+      return eq(entry.main, true)
+    default:
+      return eq(entry.status, status)
+  }
+}
+
+/**
+ * Rows in one locale; null is unlocalized. Stored locales use the configured
+ * spelling, so a requested locale matches any case of it.
+ */
+export function localeCondition(
+  scope: Scope,
+  entry: EntryIndexTarget,
+  locale: string | null | HasSql<string | null>
+): Sql<boolean> {
+  if (locale === null) return isNull(entry.locale)
+  if (typeof locale !== 'string') return eq(entry.locale, locale)
+  const spellings = scope.locales(locale)
+  return spellings.length === 1
+    ? eq(entry.locale, spellings[0])
+    : inArray(entry.locale, spellings)
+}
+
+interface FieldTranslatedRoot {
+  workspace: string
+  root: string
+  locales: Set<string>
+}
+
+const fieldTranslatedRoots = new WeakMap<Config, Array<FieldTranslatedRoot>>()
+
+/**
+ * The roots declared with `i18n: {translate: 'fields'}`. Media roots translate
+ * fields too, but their files keep matching only queries without a locale, as
+ * they did before.
+ */
+function translatedFieldRoots(config: Config): Array<FieldTranslatedRoot> {
+  let result = fieldTranslatedRoots.get(config)
+  if (result) return result
+  result = entries(config.workspaces).flatMap(([workspace, data]) =>
+    entries(getWorkspace(data).roots).flatMap(([root, rootConfig]) => {
+      const rootData = Root.data(rootConfig)
+      const i18n = Root.fieldI18n(rootData)
+      if (!i18n || rootData.isMediaRoot) return []
+      const locales = new Set(i18n.locales.map(l => l.toLowerCase()))
+      return [{workspace, root, locales}]
+    })
+  )
+  fieldTranslatedRoots.set(config, result)
+  return result
+}
+
+/**
+ * Rows in a locale, or of a root that translates fields to that locale: such
+ * a root keeps a single entry, unlocalized, for all of its locales
+ */
+function queryLocaleCondition(
+  config: Config,
+  scope: Scope,
+  entry: EntryIndexTarget,
+  locale: string | null
+): Sql<boolean> {
+  const own = localeCondition(scope, entry, locale)
+  if (locale === null) return own
+  const requested = locale.toLowerCase()
+  const roots = translatedFieldRoots(config)
+    .filter(candidate => candidate.locales.has(requested))
+    .map(candidate =>
+      and(
+        eq(entry.workspace, candidate.workspace),
+        eq(entry.root, candidate.root)
+      )
+    )
+  if (roots.length === 0) return own
+  return or(own, and(isNull(entry.locale), or(...roots)))
+}
+
+interface EntryQueryOptions {
+  source?: EntryIndexTarget
+  search?: ReturnType<typeof searchQuery>
+  entry?: EntryIndexTarget
+  depth?: number
+  baseEntry?: EntryIndexTarget
+  /** Select the single expression of the query, to use it as a subquery */
+  scalar?: boolean
+  /** Wrap every row and carry its entry id next to the selection. */
+  withId?: boolean
+}
+
+export function compileEntryQuery(
+  config: Config,
+  query: GraphQuery,
+  options: EntryQueryOptions = {}
+) {
+  const {
+    source,
+    entry = EntryIndexTable,
+    depth = 0,
+    baseEntry = entry
+  } = options
+  const search = options.search ?? searchQuery(query.search, entry)
+  if (query.preview)
+    throw new Error('SQL preview requires its dedicated query stage')
+  const scope = getScope(config)
+  // A related entry's value, eg. to order by the title of a linked entry
+  function scalar(relationQuery: EdgeQuery): HasSql {
+    if (relationQuery.count) {
+      const {rows} = compileEntryQuery(
+        config,
+        {...relationQuery, status: query.status ?? 'published'},
+        {
+          source: entry,
+          entry: alias(baseEntry, `alinea_scalar_${depth + 1}`),
+          depth: depth + 1,
+          baseEntry
+        }
+      )
+      const matches = rows.as(`alinea_scalar_count_${depth + 1}`)
+      return sql`(${getQuery(builder.select(count()).from(matches))})`
+    }
+    if (!isRecord(relationQuery.select) || !hasExpr(relationQuery.select))
+      throw new Error(
+        'A relation expression must select a single expression or count'
+      )
+    const {rows} = compileEntryQuery(
+      config,
+      {...relationQuery, status: query.status ?? 'published'},
+      {
+        source: entry,
+        entry: alias(baseEntry, `alinea_scalar_${depth + 1}`),
+        depth: depth + 1,
+        baseEntry,
+        scalar: true
+      }
+    )
+    return sql`(${getQuery(rows)})`
+  }
+  const membership = new Expressions(scope, entry, search, undefined, scalar)
+  const queryTypes: Array<Type> = query.type
+    ? ((Array.isArray(query.type) ? query.type : [query.type]) as Array<Type>)
+    : []
+  const conditions: Array<Sql<boolean>> = []
+  // An explicit authored status addresses physical versions, including one
+  // currently hidden by another active/main version.
+  if (query.versionStatus === undefined)
+    conditions.push(eq(entry.visible, true))
+  const edge = 'edge' in query ? (query as EdgeQuery) : undefined
+  const link = edge?.edge === 'entrySingle' || edge?.edge === 'entryMultiple'
+  let links: ReturnType<typeof linkRelation> | undefined
+  if (edge) {
+    if (!source) throw new Error('A relation query requires a source entry')
+    if (link) {
+      const name = scope.nameOf(edge.field)
+      if (!name) throw new Error('Link field is not in the configured schema')
+      links = linkRelation(source, name, edge.edge === 'entryMultiple')
+    } else if (edge.edge === 'referencedBy') {
+      const field = edge.field
+      const path = field && scope.dataPathOf(field as Field)
+      if (field && !path)
+        throw new Error('Link field is not in the configured schema')
+      const via = path && {path, multiple: field instanceof LinksField}
+      // A locale the query asks for replaces the locale of the source
+      const ownLocale = query.locale === undefined && !query.preferredLocale
+      conditions.push(referencedByCondition(entry, source, via, ownLocale))
+    } else conditions.push(relationCondition(entry, edge, source))
+  }
+  conditions.push(statusCondition(entry, query.status))
+  for (const key of [
+    'id',
+    'parentId',
+    'versionStatus',
+    'main',
+    'path',
+    'filePath',
+    'seeded',
+    'url',
+    'level',
+    'createdAt',
+    'updatedAt'
+  ] as const)
+    if (query[key] !== undefined)
+      conditions.push(compileCondition(membership.index(key), query[key]))
+  for (const key of ['workspace', 'root'] as const) {
+    const input = query[key]
+    const value =
+      isRecord(input) && (hasWorkspace(input) || hasRoot(input))
+        ? scope.nameOf(input as Entity)
+        : input
+    if (value !== undefined)
+      conditions.push(compileCondition(membership.index(key), value))
+  }
+  if (query.locale !== undefined && edge?.edge !== 'translations')
+    conditions.push(queryLocaleCondition(config, scope, entry, query.locale))
+  else if (query.preferredLocale && edge?.edge !== 'translations')
+    conditions.push(
+      or(
+        isNull(entry.locale),
+        localeCondition(scope, entry, query.preferredLocale)
+      )
+    )
+  else if (link && source)
+    conditions.push(
+      or(isNull(entry.locale), localeCondition(scope, entry, source.locale))
+    )
+  if (query.type) {
+    const names = queryTypes.map(type => {
+      const name = scope.nameOf(type)
+      if (!name) throw new Error('Query type is not in the configured schema')
+      return name
+    })
+    // A single type is an equality, which the partial field indexes of the
+    // type match
+    conditions.push(
+      names.length === 1
+        ? eq(entry.type, names[0]!)
+        : compileCondition(membership.index('type'), {in: names})
+    )
+  }
+  const location = Array.isArray(query.location)
+    ? query.location
+    : query.location && scope.locationOf(query.location)
+  if (location && location.length >= 1 && location.length <= 3) {
+    conditions.push(eq(entry.workspace, location[0]))
+    if (location.length >= 2) conditions.push(eq(entry.root, location[1]))
+    if (location.length === 3)
+      conditions.push(eq(entry.sourceRoot, location[2]))
+  }
+  if (search) conditions.push(search.condition)
+  if (query.alias !== undefined)
+    conditions.push(
+      arrayIncludes(membership.index('aliases'), item =>
+        compileCondition(jsonField(item, ['url']), query.alias, 1)
+      )
+    )
+  // A related entry exists, eg. `{_referenced: Query.referencedBy(...)}`
+  function related(name: string, condition: RelationCondition): Sql<boolean> {
+    if (name !== '_referenced' || condition.edge !== 'referencedBy')
+      throw new Error(`Unsupported relation condition on ${name}`)
+    const {rows} = compileEntryQuery(
+      config,
+      {
+        ...(condition as EdgeQuery),
+        count: true,
+        status: query.status ?? 'published'
+      },
+      {
+        source: entry,
+        entry: alias(baseEntry, `alinea_exists_${depth + 1}`),
+        depth: depth + 1,
+        baseEntry
+      }
+    )
+    return exists(rows)
+  }
+  if (query.filter !== undefined)
+    conditions.push(
+      compileFilter(query.filter, name => membership.field(name), related)
+    )
+  if (Array.isArray(query.groupBy))
+    throw new Error('groupBy must be a single field')
+  const grouping = query.groupBy ? [membership.expr(query.groupBy)] : undefined
+  const ordering: Array<HasSql> = []
+  let uniquelyOrdered = false
+  // Ties after a descending date or number follow its direction, so its field
+  // index covers the whole order and no rows need sorting.
+  let descendingTies = false
+  if (query.orderBy) {
+    for (const order of Array.isArray(query.orderBy)
+      ? query.orderBy
+      : [query.orderBy]) {
+      const expression = order.asc ?? order.desc
+      if (!expression || (order.asc !== undefined && order.desc !== undefined))
+        throw new Error('orderBy must specify exactly one direction')
+      const internal = getExpr(expression)
+      const ordersByFilePath =
+        internal.type === 'entryField' && internal.name === 'filePath'
+      const value = membership.expr(expression)
+      const ordersByIndex =
+        internal.type === 'field'
+          ? isOrderedField(expression)
+          : internal.type === 'entryField' &&
+            internal.path?.join() === 'metadata' &&
+            orderedMetadata.has(internal.name)
+      // Strings are case-insensitive unless the query opts in. The field index
+      // orders dates and numbers as is, which case folding cannot change. Ids
+      // and indexes are base62 keys, which only order as stored.
+      const collated =
+        ordersByIndex ||
+        order.caseSensitive ||
+        (internal.type === 'entryField' &&
+          !internal.path &&
+          (internal.name === 'id' || internal.name === 'index'))
+          ? value
+          : sql`${value} collate nocase`
+      // Nulls sort last in either direction, SQLite sorts them last for desc
+      ordering.push(
+        order.asc ? sql`${collated} asc nulls last` : desc(collated)
+      )
+      descendingTies = ordersByIndex && !order.asc
+      uniquelyOrdered ||= ordersByFilePath
+    }
+  } else if (search) ordering.push(asc(search.rank))
+  else if (edge?.edge === 'parents') ordering.push(asc(entry.level))
+  // The entry's own language first. SQLite before 3.45 cannot order a
+  // relation by a column of its source, so it orders by a selected column.
+  const selfFirst =
+    !query.orderBy &&
+    !search &&
+    edge?.edge === 'translations' &&
+    edge.includeSelf &&
+    source
+      ? when([eq(entry.locale, source.locale), 0], 1)
+      : undefined
+  if (selfFirst) ordering.push(asc(sql.identifier('selfFirst')))
+  const tie = descendingTies ? desc : asc
+  const stableOrdering = links
+    ? [asc(links.ordinal)]
+    : [tie(entry.index), tie(entry.filePath)]
+  if (!uniquelyOrdered) ordering.push(...stableOrdering)
+
+  function relation(relationQuery: EdgeQuery): CompiledRelation {
+    const nestedEntry = alias(baseEntry, `alinea_relation_${depth + 1}`)
+    const {rows, plan} = compileEntryQuery(
+      config,
+      {...relationQuery, status: query.status ?? 'published'},
+      {
+        source: entry,
+        entry: nestedEntry,
+        depth: depth + 1,
+        baseEntry
+      }
+    )
+    if (plan.count) {
+      const matches = rows.as(`alinea_relation_count_${depth + 1}`)
+      return {
+        selection: include.one(
+          builder.select(count().as('count')).from(matches)
+        ),
+        plan
+      }
+    }
+    return {
+      selection: plan.single ? include.one(rows) : include(rows),
+      plan
+    }
+  }
+  const projection = new Expressions(scope, entry, search, relation, scalar)
+  // Counts select the rowid, which every index covers
+  const selection = query.count
+    ? entry.rowid
+    : options.scalar
+      ? membership.expr(query.select as Expr)
+      : projection.projection(
+          query.select ?? {
+            ...Object.assign({}, ...queryTypes),
+            ...EntryFields,
+            ...(isRecord(query.include) ? query.include : {})
+          }
+        )
+  for (const [key, value] of [
+    ['skip', query.skip],
+    ['take', query.take]
+  ] as const)
+    if (value !== undefined && (!Number.isSafeInteger(value) || value < 0))
+      throw new Error(`${key} must be a non-negative integer`)
+  // Graph picks the first source-ordered match in each group before ordering
+  // or pagination. Rank identities, not projected values, to preserve that rule.
+  let grouped: Sql<boolean> | undefined
+  if (grouping) {
+    let ranked = builder
+      .select({
+        versionId: entry.versionId,
+        linkOrdinal: links?.ordinal ?? sql.value(0),
+        rank: sql<number>`row_number() over (partition by ${sql.join(grouping, sql`, `)}
+        order by ${search?.rank ?? links?.ordinal ?? entry.index}, ${entry.filePath}, ${entry.versionId})`
+      })
+      .from(entry)
+      .where(sql.value(true))
+    if (search) ranked = ranked.innerJoin(search.target, search.identity)
+    if (links) ranked = ranked.innerJoin(links.target, eq(entry.id, links.id))
+    const matches = ranked.where(and(...conditions)).as('group_matches')
+    grouped = exists(
+      builder
+        .select(sql.value(1))
+        .from(matches)
+        .where(
+          and(
+            eq(matches.rank, 1),
+            eq(matches.versionId, entry.versionId),
+            links ? eq(matches.linkOrdinal, links.ordinal) : sql.value(true)
+          )
+        )
+    )
+  }
+  const single = Boolean(
+    options.scalar ||
+    query.first ||
+    query.get ||
+    edge?.edge === 'parent' ||
+    edge?.edge === 'next' ||
+    edge?.edge === 'previous'
+  )
+  function selectRows(selection: SelectionInput) {
+    let rows = builder.select(selection).from(entry).where(sql.value(true))
+    if (search) rows = rows.innerJoin(search.target, search.identity)
+    if (links) rows = rows.innerJoin(links.target, eq(entry.id, links.id))
+    rows = rows.where(and(...conditions, ...(grouped ? [grouped] : [])))
+    // Counting every match needs no order, which would sort all of them
+    if (!query.count || query.skip || query.take)
+      rows = rows.orderBy(...ordering)
+    if (query.skip) rows = rows.offset(query.skip)
+    if (query.take) rows = rows.limit(query.take)
+    else if (query.skip)
+      // SQLite requires a LIMIT with OFFSET. This is also accepted by the
+      // other drivers and covers every safely representable Graph row count.
+      rows = rows.limit(Number.MAX_SAFE_INTEGER)
+    if (!query.count && single) rows = rows.limit(1)
+    return rows
+  }
+
+  // Fields resolve their links in the locale of the entry they were read
+  // from; the own language first is ordered by its selected column.
+  const wrapped =
+    !options.scalar &&
+    Boolean(
+      options.withId ||
+      projection.relations.length ||
+      projection.fields.length ||
+      selfFirst
+    )
+  const plan: ProjectionPlan = {
+    count: query.count === true,
+    single,
+    wrapped,
+    locale: query.locale ?? query.preferredLocale ?? null,
+    relations: projection.relations,
+    fields: projection.fields
+  }
+  return {
+    rows: selectRows(
+      wrapped
+        ? {
+            value: selection,
+            locale: entry.locale,
+            // Localised fields read the locales of the root of their entry
+            workspace: entry.workspace,
+            root: entry.root,
+            ...(options.withId ? {id: entry.id} : {}),
+            ...(selfFirst ? {selfFirst} : {})
+          }
+        : selection
+    ),
+    plan
+  }
+}

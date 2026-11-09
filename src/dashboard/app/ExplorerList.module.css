@@ -1,0 +1,35 @@
+.ExplorerList {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+.ExplorerList-drag-preview {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  color: var(--alinea-fg);
+  background: var(--alinea-overlay);
+  border: 1px solid var(--alinea-border);
+  border-radius: var(--alinea-radius);
+  box-shadow: var(--alinea-shadow-raised);
+}
+
+.ExplorerList-drag-preview-label {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.ExplorerList-empty {
+  min-height: 280px;
+  height: 100%;
+}
+
+.ExplorerList-empty-button {
+  pointer-events: auto;
+}

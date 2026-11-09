@@ -1,0 +1,4 @@
+.ReadOnlyBadge {
+  background: var(--alinea-warning-subtle);
+  color: var(--alinea-warning-subtle-fg);
+}

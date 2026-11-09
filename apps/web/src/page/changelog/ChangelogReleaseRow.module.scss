@@ -1,0 +1,113 @@
+@use '@/style' as *;
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 48px 0;
+  border-top: 1px solid var(--web-outline);
+  // The header does not stick on this page, the release select does on
+  // small screens
+  scroll-margin-top: 32px;
+
+  &:last-child {
+    border-bottom: 1px solid var(--web-outline);
+  }
+
+  &.is-latest {
+    gap: 32px;
+    margin-bottom: 64px;
+    padding: 44px 48px 48px;
+    border: none;
+    border-radius: 12px;
+    background: var(--web-accent-soft);
+    // Inline code sits on white inside the tint
+    --web-code-inline-background: var(--web-surface);
+  }
+
+  &.is-latest + & {
+    border-top: none;
+    padding-top: 0;
+  }
+
+  @include sm {
+    padding: 32px 0;
+    scroll-margin-top: 80px;
+
+    &.is-latest {
+      margin-top: 28px;
+      margin-bottom: 40px;
+      padding: 28px 24px;
+    }
+  }
+}
+
+.meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  &-version {
+    margin: 0;
+    font-family: var(--web-title-font);
+    font-weight: 500;
+    font-size: 24px;
+    line-height: 1.25;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+
+    .root.is-latest & {
+      font-size: 28px;
+      line-height: 1.2;
+    }
+  }
+
+  &-line {
+    margin: 0;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--web-foreground-faded);
+  }
+
+  &-latest {
+    font-weight: 500;
+    color: var(--web-accent);
+  }
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+
+  &-label {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+
+  &-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 16px;
+    line-height: 1.65;
+
+    &-item {
+      position: relative;
+      min-width: 0;
+      padding-left: 26px;
+
+      &::before {
+        content: '—';
+        position: absolute;
+        left: 0;
+        color: var(--web-code-comment);
+      }
+    }
+  }
+}

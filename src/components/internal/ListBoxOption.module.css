@@ -1,0 +1,78 @@
+.ListBoxOption {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0.4rem;
+  border-radius: var(--alinea-radius-sm);
+  font-size: var(--alinea-font-size-base);
+  outline: none;
+  cursor: pointer;
+
+  /* The selected option is tinted like the selected entry in the sidebar */
+  &[aria-selected='true'] {
+    background: color-mix(in oklab, var(--alinea-selected), var(--alinea-bg) 60%);
+    color: var(--alinea-selected-fg);
+    font-weight: 500;
+  }
+
+  &.is-highlighted {
+    background: var(--alinea-muted);
+  }
+
+  &[aria-selected='true'].is-highlighted {
+    background: var(--alinea-selected);
+  }
+
+  /* The subtle background only marks the item under the pointer, keyboard
+     focus also gets a ring */
+  &.is-focusVisible {
+    outline: 2px solid var(--alinea-ring);
+    outline-offset: -2px;
+  }
+
+  &[aria-disabled='true'] {
+    pointer-events: none;
+    opacity: 0.5;
+  }
+}
+
+.ListBoxOption-icon {
+  flex-shrink: 0;
+}
+
+.ListBoxOption-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ListBoxOption-label {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  /* A Select renders the selected option in its trigger, outside the list */
+  :not(.ListBoxOption) > .ListBoxOption-content > & {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+.ListBoxOption-description {
+  font-size: 0.75rem;
+  font-weight: 400;
+  opacity: 0.8;
+
+  :not(.ListBoxOption) > .ListBoxOption-content > & {
+    display: none;
+  }
+}
+
+.ListBoxOption-indicator {
+  flex-shrink: 0;
+  margin-left: auto;
+  font-size: 1rem;
+}

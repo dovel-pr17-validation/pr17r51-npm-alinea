@@ -1,0 +1,24 @@
+@use '@/style' as *;
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  &-stage {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    min-height: 220px;
+    padding: 40px 32px;
+    border-radius: 12px;
+    background: var(--web-band);
+    overflow-x: auto;
+
+    @include s {
+      padding: 32px 16px;
+    }
+  }
+}

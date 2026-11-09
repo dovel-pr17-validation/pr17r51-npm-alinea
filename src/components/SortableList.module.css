@@ -1,0 +1,306 @@
+.SortableList {
+  position: relative;
+  border: 1px solid var(--alinea-border);
+  border-radius: var(--alinea-radius);
+  background: var(--alinea-bg);
+  color: var(--alinea-fg);
+  font-size: var(--alinea-font-size-base);
+}
+
+.SortableListAdd-inner {
+  align-items: center;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: row;
+  justify-content: center;
+  /* Rows line up with the height of a text input */
+  min-height: calc(1.5 * var(--alinea-font-size-base) + 16px);
+  border-top: 1px solid var(--alinea-border);
+}
+
+.SortableListAdd:first-child .SortableListAdd-inner {
+  border-top: 0;
+}
+
+.SortableListItem {
+  position: relative;
+  display: grid;
+  /* Lets the insert line reach over the border above the item */
+  overflow-x: clip;
+}
+
+/* Sits on the border above the item, the add button shows on hover */
+.SortableListItemInsert {
+  position: absolute;
+  top: -8px;
+  right: 0;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  opacity: 0;
+  transition: opacity var(--alinea-transition);
+}
+
+.SortableListItemInsert::before {
+  content: '';
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  left: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--alinea-primary);
+}
+
+/* Items pass over the borders while dragging */
+.SortableList[data-dragging] > .SortableListItem > .SortableListItemInsert {
+  visibility: hidden;
+}
+
+.SortableListItemInsert:hover,
+.SortableListItemInsert:has(:focus-visible),
+.SortableListItemInsert:has([aria-expanded='true']) {
+  opacity: 1;
+}
+
+/* Only shows once the pointer rests on the border, not while passing over */
+.SortableListItemInsert:hover {
+  transition-delay: 300ms;
+}
+
+.SortableListItemInsert-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: var(--alinea-bg);
+  color: var(--alinea-primary);
+  font-size: 14px;
+  box-shadow: 0 0 0 1.5px var(--alinea-primary);
+  cursor: pointer;
+  outline: none;
+  transition: var(--alinea-transition);
+  transition-property: background-color, color;
+
+  @media (hover: hover) {
+    &:hover {
+      background: var(--alinea-primary);
+      color: var(--alinea-primary-fg);
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--alinea-ring);
+    outline-offset: 2px;
+  }
+}
+
+.SortableListItem:not(:first-child) {
+  border-top: 1px solid var(--alinea-border);
+}
+
+.SortableListItem[aria-current='true'] > .SortableListItemHeader {
+  background: var(--alinea-muted);
+}
+
+/* Lifted above the other items while it follows the pointer */
+.SortableListItem[data-dragging] {
+  z-index: 5;
+  overflow: clip;
+  border-radius: var(--alinea-radius);
+  background: var(--alinea-bg);
+  box-shadow:
+    0 0 0 1px var(--alinea-border),
+    0 8px 24px -8px rgb(0 0 0 / 0.25);
+}
+
+.SortableListItem[data-dragging] > .SortableListItemHeader {
+  background: var(--alinea-muted);
+}
+
+/* Set on the document while an item is dragged, the pointer can leave the
+   list and pass over buttons that set their own cursor */
+:global(:root[data-sortable-dragging]) * {
+  cursor: grabbing !important;
+}
+
+.SortableListItemHeader[data-reorderable] {
+  cursor: grab;
+}
+
+.SortableListItemHeader {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  min-height: calc(1.5 * var(--alinea-font-size-base) + 16px);
+  padding: 2px 8px;
+  transition: background-color 0.25s ease-out;
+}
+
+/* Sets an open item's header apart from its content */
+:where(.SortableListItem:has(> .SortableListItemContent)) > .SortableListItemHeader {
+  background: var(--alinea-bg-muted);
+}
+
+/* The list does not clip, so the insert line can sit on its top border: the
+   headers in its corners round their own background */
+.SortableList > .SortableListItem:first-child > .SortableListItemHeader {
+  border-start-start-radius: calc(var(--alinea-radius) - 1px);
+  border-start-end-radius: calc(var(--alinea-radius) - 1px);
+}
+
+.SortableList > .SortableListItem:last-child > .SortableListItemHeader:last-child {
+  border-end-start-radius: calc(var(--alinea-radius) - 1px);
+  border-end-end-radius: calc(var(--alinea-radius) - 1px);
+}
+
+/* The title and its "…" read as one button, the parts inside keep their gap */
+.SortableListItemTrigger[data-slot] {
+  flex: 1;
+  min-width: 0;
+  height: auto;
+  min-height: 26px;
+  padding: 0;
+  border-radius: var(--alinea-radius-sm);
+  font-weight: inherit;
+}
+
+/* Hovering the title or its "…" colors the whole row, the trigger itself
+   stays transparent. Outranks the hover of the ghost button. */
+.SortableListItemTrigger[data-slot][data-variant]:hover {
+  background: transparent;
+}
+
+@media (hover: hover) {
+  .SortableListItemHeader:has(.SortableListItemTrigger:hover) {
+    background: var(--alinea-muted);
+  }
+}
+
+/* Keyboard focus rings the whole row rather than the title inside it */
+.SortableListItemTrigger[data-slot]:focus-visible {
+  outline: none;
+}
+
+.SortableListItemHeader:has(.SortableListItemTrigger:focus-visible) {
+  box-shadow: inset 0 0 0 2px var(--alinea-ring);
+}
+
+.SortableListItemTrigger-more {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
+  color: var(--alinea-fg-muted);
+  font-size: 14px;
+  opacity: 0;
+  transition:
+    color var(--alinea-transition),
+    opacity var(--alinea-transition);
+
+  /* Shows on hover of the row, while focused or while the settings are open */
+  .SortableListItemHeader:hover &,
+  .SortableListItemTrigger:focus-visible &,
+  .SortableListItemTrigger[aria-expanded='true'] & {
+    opacity: 1;
+  }
+
+  @media (hover: none) {
+    opacity: 1;
+  }
+
+  .SortableListItemTrigger:hover &,
+  .SortableListItemTrigger[aria-expanded='true'] & {
+    color: var(--alinea-fg);
+  }
+}
+
+.SortableListItemTitle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.SortableListItemDescription {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--alinea-fg-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.SortableListItemActions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.SortableListItemToggle {
+  flex: 0 0 auto;
+  color: var(--alinea-fg-muted);
+}
+
+/* A compact button, so the icon sits as far from the title as the parts of
+   the title sit from each other, with room between their hover backgrounds */
+.SortableListItemToggle[data-slot][data-size] {
+  width: 20px;
+  height: 20px;
+  margin-right: -6px;
+}
+
+.SortableListItemToggle:hover,
+.SortableListItemToggle:active,
+.SortableListItemToggle[data-active] {
+  color: var(--alinea-fg);
+}
+
+.SortableListItemContent {
+  display: grid;
+  gap: 12px;
+  align-items: normal;
+  padding: 12px 16px 16px;
+  /* Drawn here so opening an item leaves its header the same height */
+  border-top: 1px solid var(--alinea-border);
+}
+
+.SortableListItemFooter {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  padding: 8px 16px;
+}
+
+.SortableListItemSettings {
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.SortableListItemSettings[data-variant='actions'] {
+  padding: 0;
+  gap: 0;
+
+  /* Actions read like menu items */
+  [data-slot='button'] {
+    font-weight: 500;
+  }
+}

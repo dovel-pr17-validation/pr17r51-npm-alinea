@@ -1,0 +1,424 @@
+{
+  "_id": "3AZ7Pb9hX7bQdNL4diYY1I3kmsJ",
+  "_type": "Doc",
+  "_index": "Zz",
+  "title": "Related",
+  "navigationTitle": "",
+  "body": [
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "A single query can also fetch entries related to the ones it finds: their parents, children and siblings, their translations, the entries they link to and the entries that link to them. Put a relation in `select` (or in `include` when you don't select), and it's resolved in the same query."
+        }
+      ]
+    },
+    {
+      "_type": "CodeBlock",
+      "_id": "3AZDfgNuyvDrRCXueFTIRZNyt0k",
+      "code": "import {cms} from '@/cms'\nimport {Blog, BlogPost} from '@/schema'\nimport {Query} from 'alinea'\n\nconst blog = await cms.get({\n  type: Blog,\n  locale: 'en',\n  select: {\n    title: Query.title,\n    posts: Query.children({\n      type: BlogPost,\n      select: {title: Query.title, url: Query.url, date: BlogPost.publishDate},\n      orderBy: {desc: BlogPost.publishDate},\n      take: 5\n    })\n  }\n})",
+      "fileName": "",
+      "language": "tsx"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Every relation takes the same options as a query, such as `type`, `filter`, `select`, `orderBy`, `skip` and `take`. `parent`, `previous` and `next` return a single entry, the others a list. Add `count: true` to get the number of matches instead, as in `Query.children({count: true})`, or `first: true` to get a single entry (or `null`). Relations can be nested, for example children with their own children."
+        }
+      ]
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Tree relations"
+        }
+      ],
+      "_anchor": "translations"
+    },
+    {
+      "_type": "bulletList",
+      "content": [
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`Query.parent(...)`: the parent entry, or nothing for entries at the top of a root."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`Query.parents(...)`: all ancestors, starting at the top of the root. Pass `depth` to get only the nearest ones: `depth: 1` is the parent."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`Query.children(...)`: the direct children. Pass `depth` to include deeper descendants too, returned as one flat list."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`Query.siblings(...)`: the other children of the same parent. Add `includeSelf: true` to include the entry itself."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`Query.previous(...)` and `Query.next(...)`: the sibling right before or after the entry, in sidebar order, or nothing at the ends."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "`Query.translations(...)`: the same entry in the other locales of the root. Add `includeSelf: true` to include the current locale, listed first."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Tree relations stay in the locale of the entry they start from (except translations, of course) and use the status of the outer query."
+        }
+      ]
+    },
+    {
+      "_type": "CodeBlock",
+      "_id": "3AZG9A84rsohhbr2FBWChmX75ey",
+      "code": "import {cms} from '@/cms'\nimport {BlogPost} from '@/schema'\nimport {Query} from 'alinea'\n\nexport async function postPage(url: string) {\n  return cms.first({\n    type: BlogPost,\n    url,\n    select: {\n      title: Query.title,\n      body: BlogPost.body,\n      // Breadcrumbs, from the top of the root down\n      breadcrumbs: Query.parents({\n        select: {title: Query.title, url: Query.url}\n      }),\n      // Pagination at the bottom of the post\n      previous: Query.previous({\n        type: BlogPost,\n        select: {title: Query.title, url: Query.url}\n      }),\n      next: Query.next({\n        type: BlogPost,\n        select: {title: Query.title, url: Query.url}\n      }),\n      // A language switcher\n      translations: Query.translations({\n        select: {locale: Query.locale, url: Query.url}\n      })\n    }\n  })\n}",
+      "fileName": "",
+      "language": "tsx"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "`siblings`, `previous` and `next` find entries that share a parent. For an entry at the top level of a root, they find the other top-level entries of the same root (and locale)."
+        }
+      ]
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Linked entries"
+        }
+      ],
+      "_anchor": "linked-entries"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Entry",
+          "marks": [
+            {
+              "_type": "link",
+              "_id": "3JkF05qTZieDBu1znYcV5ymelF5",
+              "_link": "entry",
+              "_entry": "2aiLjrXSg8gyirKnw9LmYKwsW2O"
+            }
+          ]
+        },
+        {
+          "_type": "text",
+          "text": ", "
+        },
+        {
+          "_type": "text",
+          "text": "Link",
+          "marks": [
+            {
+              "_type": "link",
+              "_id": "3JkF06ndyOvGAEhnyJXhUh2OIOs",
+              "_link": "entry",
+              "_entry": "24yE79dE2ssYPDQQHFFgT0eg2tH"
+            }
+          ]
+        },
+        {
+          "_type": "text",
+          "text": ", "
+        },
+        {
+          "_type": "text",
+          "text": "Image",
+          "marks": [
+            {
+              "_type": "link",
+              "_id": "3JkF03ljHTuTCqMJYPqUNFoTGk1",
+              "_link": "entry",
+              "_entry": "Xu4-sW6S0ynehY5zKR1VZ"
+            }
+          ]
+        },
+        {
+          "_type": "text",
+          "text": " and "
+        },
+        {
+          "_type": "text",
+          "text": "File",
+          "marks": [
+            {
+              "_type": "link",
+              "_id": "3JkF03IWkghDFdk3X2W84dLKhTl",
+              "_link": "entry",
+              "_entry": "tlhZ01MHUjv3Od172Ew6w"
+            }
+          ]
+        },
+        {
+          "_type": "text",
+          "text": " fields return the basics of what they link to. To get other fields of the linked entries, query through the field:"
+        }
+      ]
+    },
+    {
+      "_type": "bulletList",
+      "content": [
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "a single link field has `.first(query)`."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "a multiple link field has `.find(query)`, `.first(query)` and `.count(query)`. Results keep the order the editor gave the links."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_type": "CodeBlock",
+      "_id": "3AhmNQsSi13caMLpuBk49bSIk2Y",
+      "code": "import {cms} from '@/cms'\nimport {Author, BlogPost} from '@/schema'\nimport {Query} from 'alinea'\n\nconst post = await cms.get({\n  type: BlogPost,\n  path: 'hello-world',\n  select: {\n    title: Query.title,\n    author: BlogPost.author.first({\n      select: {name: Query.title, bio: Author.bio, avatar: Author.avatar}\n    }),\n    categories: BlogPost.categories.find({\n      select: {title: Query.title, url: Query.url}\n    })\n  }\n})",
+      "fileName": "",
+      "language": "tsx"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Linked entries are looked up in the locale of the entry you queried, falling back to entries without a locale, so a link to an untranslated author keeps working from every translation of a post."
+        }
+      ]
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Entries that link here"
+        }
+      ],
+      "_anchor": "entries-that-link-here"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Links are stored on the entry that links. `Query.referencedBy` finds the entries that link to the entry, through any of their fields, including links in rich text. Pass `type` to only find entries of that type, and `field` to only follow one link field of it. Like the other relations it takes the query options, `count: true` and `first: true`:"
+        }
+      ]
+    },
+    {
+      "_type": "CodeBlock",
+      "_id": "3KdUIqSIuHVEywrPhxCDaRplVnr",
+      "code": "import {cms} from '@/cms'\nimport {Author, BlogPost} from '@/schema'\nimport {Query} from 'alinea'\n\nexport async function authorPage(path: string) {\n  return cms.get({\n    type: Author,\n    path,\n    select: {\n      name: Query.title,\n      bio: Author.bio,\n      // The posts whose author field links to this author\n      posts: Query.referencedBy({\n        type: BlogPost,\n        field: BlogPost.author,\n        select: {title: Query.title, url: Query.url},\n        orderBy: {desc: BlogPost.publishDate}\n      }),\n      // Every entry linking to the author, in any field\n      mentions: Query.referencedBy({count: true})\n    }\n  })\n}",
+      "language": "tsx"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "The entries that link to a translated entry are looked up in its locale. For an entry without a locale, such as a shared author, the linking entries of every locale are returned: pass `locale` to only get those of one locale."
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "The same relation is a filter condition: `_referenced` holds for entries that an entry of the query links to. `{_referenced: true}` matches entries that anything links to and `{_referenced: false}` entries nothing links to, such as unused media files:"
+        }
+      ]
+    },
+    {
+      "_type": "CodeBlock",
+      "_id": "3KdUIoLZ9cWb41ufd9932Iab2Pp",
+      "code": "import {cms} from '@/cms'\nimport {Author, BlogPost} from '@/schema'\nimport {Query} from 'alinea'\n\n// Authors of at least one featured post\nconst featuredAuthors = await cms.find({\n  type: Author,\n  filter: {\n    _referenced: Query.referencedBy({\n      type: BlogPost,\n      field: BlogPost.author,\n      filter: {featured: true}\n    })\n  },\n  select: Query.title\n})",
+      "language": "tsx"
+    },
+    {
+      "_type": "heading",
+      "level": 3,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Filtering on the link"
+        }
+      ],
+      "_anchor": "filtering-on-the-link"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "The other way around, \"the posts by this author\" is a filter on the posts: links store the id of their target as `_entry`. This is the way to go when you start from the posts, for example to page through them:"
+        }
+      ]
+    },
+    {
+      "_type": "CodeBlock",
+      "_id": "3KdUIrC7b70NWURCxraxa04PgIc",
+      "code": "import {cms} from '@/cms'\nimport {BlogPost} from '@/schema'\nimport {Query} from 'alinea'\n\nexport async function postsBy(authorId: string, page: number) {\n  return cms.find({\n    type: BlogPost,\n    // Single link: has, multiple links: includes\n    filter: {author: {has: {_entry: authorId}}},\n    select: {title: Query.title, url: Query.url},\n    orderBy: {desc: BlogPost.publishDate},\n    skip: page * 10,\n    take: 10\n  })\n}",
+      "language": "tsx"
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "For multiple links, such as categories, use `{categories: {includes: {_entry: id}}}`. More combinations are in "
+        },
+        {
+          "_type": "text",
+          "text": "Filtering",
+          "marks": [
+            {
+              "_type": "link",
+              "_id": "3KdUItno7SDiKNmiZjYpFfEkBoA",
+              "_link": "entry",
+              "_entry": "3AZJ7caQ7xN9oe18v57EGVm19Yz"
+            }
+          ]
+        },
+        {
+          "_type": "text",
+          "text": " and the "
+        },
+        {
+          "_type": "text",
+          "text": "examples",
+          "marks": [
+            {
+              "_type": "link",
+              "_id": "3KdUIsAPPhtEzhwufJG5HWtg0FB",
+              "_link": "entry",
+              "_entry": "3AZY63OxjiPWzVM4siKRVbqLNF1"
+            }
+          ]
+        },
+        {
+          "_type": "text",
+          "text": "."
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "title": "",
+    "description": "",
+    "openGraph": {
+      "image": {},
+      "title": "",
+      "description": ""
+    },
+    "createdAt": 1790189232,
+    "createdBy": {
+      "name": "Ben Merckx",
+      "email": "ben@codeurs.be"
+    },
+    "updatedAt": 1790236898,
+    "updatedBy": {
+      "name": "Ben Merckx",
+      "email": "ben@codeurs.be"
+    }
+  }
+}

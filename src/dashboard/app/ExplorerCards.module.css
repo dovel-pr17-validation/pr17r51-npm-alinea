@@ -1,0 +1,8 @@
+.ExplorerCards {
+  box-sizing: border-box;
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
+}

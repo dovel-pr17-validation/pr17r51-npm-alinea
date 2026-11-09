@@ -1,0 +1,109 @@
+@use '@/style' as *;
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 40px;
+
+  &-part {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  &-title {
+    font: 500 15px/1.4 var(--web-mono-font);
+    color: var(--web-foreground);
+  }
+
+  &-description,
+  &-accepts {
+    font-size: 14.5px;
+    line-height: 1.6;
+    color: var(--web-foreground-faded);
+  }
+
+  &-inline {
+    font: 400 13px/1 var(--web-mono-font);
+    color: var(--web-foreground);
+  }
+
+  &-table {
+    border-bottom: 1px solid var(--web-outline);
+    font-size: 14.5px;
+    line-height: 1.5;
+  }
+
+  &-row {
+    display: grid;
+    grid-template-columns: 120px minmax(0, 1.4fr) 84px minmax(0, 1fr);
+    gap: 16px;
+    align-items: baseline;
+    padding: 14px 0;
+    border-top: 1px solid var(--web-outline);
+
+    &.is-head {
+      padding-top: 0;
+      border-top: none;
+      font-size: 13.5px;
+      font-weight: 500;
+      color: var(--web-foreground-faded);
+    }
+
+    @include s {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 4px;
+
+      &.is-head {
+        display: none;
+      }
+
+      &:nth-child(2) {
+        border-top: none;
+      }
+    }
+  }
+
+  &-prop {
+    font: 500 13px/1.6 var(--web-mono-font);
+    color: var(--web-foreground);
+    overflow-wrap: anywhere;
+  }
+
+  &-required {
+    margin-left: 2px;
+    color: var(--web-accent);
+  }
+
+  &-type {
+    font: 400 12.5px/1.6 var(--web-mono-font);
+    color: var(--web-accent);
+    overflow-wrap: anywhere;
+  }
+
+  &-default {
+    font: 400 12.5px/1.6 var(--web-mono-font);
+    color: var(--web-foreground-faded);
+    overflow-wrap: anywhere;
+  }
+
+  &-label {
+    display: none;
+
+    @include s {
+      display: inline;
+      font-family: var(--web-body-font);
+      color: var(--web-foreground-muted);
+    }
+  }
+
+  &-text {
+    color: var(--web-foreground-faded);
+
+    &:empty {
+      @include s {
+        display: none;
+      }
+    }
+  }
+}

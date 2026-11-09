@@ -1,0 +1,231 @@
+{
+  "_id": "3JjNWhIOOARLjiO2HjeVoVyVN48",
+  "_type": "Doc",
+  "_index": "a1",
+  "title": "Instant publishing",
+  "navigationTitle": "",
+  "body": [
+    {
+      "_type": "paragraph",
+      "textAlign": "left",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Content goes live on every commit, without a rebuild. When an editor publishes, Alinea commits the change to your repository and your site starts serving it right away."
+        }
+      ]
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "How it works"
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "textAlign": "left",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Every publish in the dashboard is a git commit. After the commit, the site syncs the new content sha from its own handler, so the next request that renders content reads the latest version. No build or redeploy has to finish before editors see their changes on the live site."
+        }
+      ]
+    },
+    {
+      "_type": "DiagramBlock",
+      "_id": "3KbBX9r4qtE4onACUO1tO9ydpWj",
+      "diagram": "publishing"
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Skip builds for content-only commits"
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Only set this up once your deployed site has a backend that syncs content at runtime: Alinea Cloud or a self-hosted backend. Without one, a deployment is how new content reaches your site, so skipping content-only builds would leave published changes offline."
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "textAlign": "left",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Because content is synced at runtime, a publish from the dashboard does not need a new deployment. Every commit the dashboard makes ends with an `Alinea-Content` trailer, holding the hash of the content it commits. On Vercel you can skip the builds of those commits with an `ignoreCommand` in `vercel.json`. The command exits successfully, which tells Vercel to skip the build, when the latest commit is a publish from the dashboard and changed nothing outside the `content` directory:"
+        }
+      ]
+    },
+    {
+      "_type": "CodeBlock",
+      "_id": "3JjNWfZKlJJcGLyuGry1Hl8DMVK",
+      "code": "{\n  \"ignoreCommand\": \"git log -1 --format=%B | grep -q '^Alinea-Content:' && git diff --quiet HEAD^ HEAD -- . ':!content'\"\n}",
+      "fileName": "vercel.json",
+      "language": "json",
+      "compact": false
+    },
+    {
+      "_type": "paragraph",
+      "textAlign": "left",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Everything else builds as before: commits you push yourself never carry the trailer, so a merge that pulled in published content, or a push of code with a content commit on top, still deploys your code. A publish that uploads a file to a media directory outside `content` builds too."
+        }
+      ]
+    },
+    {
+      "_type": "NoticeBlock",
+      "_id": "3JjNWeNM6LEvGr4SFqKGSakxQnm",
+      "level": "info",
+      "body": [
+        {
+          "_type": "paragraph",
+          "textAlign": "left",
+          "content": [
+            {
+              "_type": "text",
+              "text": "Adjust `content` if your content lives in a different directory."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_type": "heading",
+      "level": 3,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Check that it works"
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "textAlign": "left",
+      "content": [
+        {
+          "_type": "text",
+          "text": "A skipped build shows as Canceled in the deployments of your Vercel project, and the list hides canceled deployments by default. Filter on Status → Canceled to find them: their log ends with \"Ignored Build Step command returned exit code 0\". To check the whole setup:"
+        }
+      ]
+    },
+    {
+      "_type": "orderedList",
+      "content": [
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Publish a change in the dashboard."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Find the deployment of its commit: it shows as Canceled."
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "_type": "listItem",
+          "content": [
+            {
+              "_type": "paragraph",
+              "content": [
+                {
+                  "_type": "text",
+                  "text": "Load the page: it shows the change without a redeploy."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "textAlign": "left",
+      "content": [
+        {
+          "_type": "text",
+          "text": "This checks both halves of the setup: content-only commits skip their build, and the site syncs their content at runtime."
+        }
+      ]
+    },
+    {
+      "_type": "heading",
+      "level": 2,
+      "content": [
+        {
+          "_type": "text",
+          "text": "Static pages"
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "textAlign": "left",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Static pages are revalidated for you. Every page that queries content is tagged, and after each commit the handler marks those pages as stale. The next visit is still answered from the cache while Next.js rebuilds the page in the background, and the visit after that gets the new content. No visitor waits for a render, and no `revalidatePath` call is needed. This includes pages generated with `generateStaticParams`: revalidation code in `afterCommit` that refreshes them by hand, such as `revalidateTag('_N_T_/layout')` or `revalidatePath('/', 'layout')`, can be removed."
+        }
+      ]
+    },
+    {
+      "_type": "paragraph",
+      "textAlign": "left",
+      "content": [
+        {
+          "_type": "text",
+          "text": "Pages rendered at request time sync on their next render. The first one after a commit can still show the previous version while the shared content sha refreshes. Content pushed to your repository without the dashboard, for example a local edit, skips the handler: pages pick it up within five minutes, or within `syncInterval` seconds when your config sets it. Use the handler's `afterCommit` hook if other caches in your app depend on content, for example your own `fetch` tags. It receives the changed `entries` and the `removed` ones, see [Commit hooks](page:guides/deploy#commit-hooks):"
+        }
+      ]
+    },
+    {
+      "_type": "CodeBlock",
+      "_id": "3KdUIs8FgUDZI0TFJKOp5Gg1ixO",
+      "code": "import {cms} from '@/cms'\nimport {createHandler} from 'alinea/next'\nimport {revalidateTag} from 'next/cache'\n\nconst handler = createHandler({\n  cms,\n  afterCommit({entries, removed}) {\n    const changed = [...entries, ...removed]\n    if (changed.some(entry => entry.type === 'Product'))\n      revalidateTag('products', 'max')\n  }\n})\n\nexport const GET = handler\nexport const POST = handler",
+      "fileName": "app/(alinea)/api/cms/route.ts",
+      "language": "tsx"
+    }
+  ],
+  "metadata": {
+    "title": "",
+    "description": "",
+    "openGraph": {
+      "title": "",
+      "image": {},
+      "description": ""
+    }
+  }
+}

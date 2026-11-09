@@ -1,0 +1,24 @@
+.DashboardErrorBoundary {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  /* Fills the page like the app shell it replaces */
+  min-height: 100%;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: var(--alinea-bg-muted);
+}
+
+.DashboardErrorBoundary-media {
+  color: var(--alinea-danger);
+}
+
+.DashboardErrorBoundary-message {
+  box-sizing: border-box;
+  width: 100%;
+  max-height: 300px;
+  color: var(--alinea-fg-muted);
+  text-align: left;
+  white-space: pre-line;
+}

@@ -1,0 +1,28 @@
+.RichTextBlock {
+  cursor: default;
+  margin: 16px 0;
+  outline: 3px solid transparent;
+}
+
+:global([data-richtext-block-host]:first-child) > .RichTextBlock {
+  margin-top: 0;
+}
+
+:global([data-richtext-block-host]:last-child) > .RichTextBlock {
+  margin-bottom: 0;
+}
+
+.RichTextBlock-header[draggable='true'] {
+  cursor: grab;
+}
+
+.RichTextBlock-anchor {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.RichTextBlock-anchor-field {
+  flex: 1;
+  min-width: 0;
+}

@@ -1,0 +1,147 @@
+.SearchField {
+  display: block;
+}
+
+.SearchFieldGroup {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  overflow: hidden;
+  border: 1px solid var(--alinea-border);
+  border-radius: var(--alinea-radius);
+  outline: 3px solid transparent;
+  background-color: var(--alinea-input);
+  transition: var(--alinea-transition);
+  transition-property: border-color, outline-color, opacity;
+
+  &:hover {
+    border-color: var(--alinea-border-strong);
+    outline-color: var(--alinea-muted);
+  }
+
+  &:focus-within {
+    border-color: var(--alinea-primary);
+    outline-color: color-mix(in oklab, var(--alinea-primary) 20%, transparent);
+  }
+
+  &:has(.SearchFieldInput[aria-invalid='true']) {
+    border-color: var(--alinea-danger);
+    outline-color: color-mix(in oklab, var(--alinea-danger) 20%, transparent);
+  }
+
+  &:has(.SearchFieldInput:disabled),
+  &:has(.SearchFieldInput[readonly]) {
+    background-color: var(--alinea-bg-muted);
+    color: var(--alinea-fg-disabled);
+  }
+
+  &:has(.SearchFieldInput:disabled) {
+    pointer-events: none;
+    opacity: 0.5;
+  }
+}
+
+.SearchFieldIcon {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  margin-left: 8px;
+  margin-right: -4px;
+  color: var(--alinea-fg-muted);
+  font-size: 20px;
+}
+
+.SearchFieldSpinner {
+  flex: 0 0 auto;
+  margin-left: 2px;
+  color: var(--alinea-fg-muted);
+}
+
+.SearchFieldInput {
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--alinea-fg);
+  font: inherit;
+  font-size: var(--alinea-font-size-base);
+  line-height: 1.5;
+
+  &::placeholder {
+    color: var(--alinea-fg-disabled);
+  }
+
+  &::-webkit-search-cancel-button,
+  &::-webkit-search-decoration {
+    -webkit-appearance: none;
+  }
+}
+
+.SearchFieldClear {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--alinea-fg-muted);
+  font: inherit;
+  cursor: pointer;
+
+  &::before {
+    content: '';
+    position: absolute;
+    width: 24px;
+    height: 24px;
+    border-radius: 100%;
+    background-color: transparent;
+    transition: background-color var(--alinea-transition);
+  }
+
+  &:hover::before,
+  &:focus-visible::before {
+    background-color: var(--alinea-muted);
+  }
+
+  .SearchFieldInput[value=''] ~ & {
+    visibility: hidden;
+  }
+
+  .SearchFieldGroup:has(.SearchFieldInput[readonly]) &,
+  .SearchFieldGroup:has(.SearchFieldInput:disabled) & {
+    visibility: hidden;
+  }
+}
+
+.SearchFieldClear-icon {
+  position: relative;
+}
+
+/* The field is the header row of its results, without a box of its own */
+.SearchField[data-variant='inline'] {
+  .SearchFieldGroup {
+    height: 44px;
+    border: 0;
+    border-radius: 0;
+    outline: none;
+    background-color: transparent;
+  }
+
+  .SearchFieldIcon {
+    width: 18px;
+    height: 18px;
+    margin: 0 10px 0 0;
+    font-size: 18px;
+  }
+
+  .SearchFieldInput {
+    padding: 5px 0;
+  }
+
+  .SearchFieldClear {
+    padding: 0 4px;
+  }
+}

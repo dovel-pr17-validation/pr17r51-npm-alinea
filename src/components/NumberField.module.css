@@ -1,0 +1,109 @@
+.NumberField {
+  display: block;
+  color: var(--alinea-fg);
+}
+
+.NumberFieldGroup {
+  display: flex;
+  position: relative;
+  border: 1px solid var(--alinea-border);
+  border-radius: var(--alinea-radius);
+  background-color: var(--alinea-input);
+  transition: var(--alinea-transition);
+  transition-property: border-color, box-shadow, background-color, opacity;
+
+  &:hover {
+    border-color: var(--alinea-border-strong);
+    box-shadow: 0 0 0 3px var(--alinea-muted);
+  }
+
+  &:focus-within {
+    border-color: var(--alinea-primary);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--alinea-primary) 20%, transparent);
+  }
+
+  /* A focused value is highlighted like a focused date segment */
+  &:has(.NumberFieldInput:focus:not([readonly])) {
+    background-color: var(--alinea-primary-subtle);
+  }
+
+  &:has(.NumberFieldInput[aria-invalid='true']) {
+    border-color: var(--alinea-danger);
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--alinea-danger) 20%, transparent);
+  }
+
+  &:has(.NumberFieldInput:disabled) {
+    pointer-events: none;
+    background-color: var(--alinea-bg-muted);
+    opacity: 0.5;
+  }
+
+  &:has(.NumberFieldInput[readonly]) {
+    background-color: var(--alinea-bg-muted);
+  }
+}
+
+.NumberFieldInput {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 70px;
+  padding: 8px 10px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--alinea-fg);
+  font: inherit;
+  font-size: var(--alinea-font-size-base);
+  line-height: 1.5;
+  text-align: left;
+
+  &::placeholder {
+    color: var(--alinea-fg-disabled);
+  }
+
+  &:focus:not([readonly]) {
+    color: var(--alinea-primary);
+  }
+
+  &[readonly] {
+    color: var(--alinea-fg-disabled);
+  }
+}
+
+.NumberFieldSteppers {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--alinea-border);
+  border-radius: 0 calc(var(--alinea-radius) - 1px) calc(var(--alinea-radius) - 1px) 0;
+  overflow: hidden;
+}
+
+.NumberFieldStepper {
+  display: flex;
+  flex-grow: 1;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 16px;
+  padding: 4px;
+  border: none;
+  background: none;
+  color: var(--alinea-fg-muted);
+  cursor: pointer;
+  transition: var(--alinea-transition);
+  transition-property: background-color, color;
+
+  &:hover {
+    background-color: color-mix(in oklab, var(--alinea-fg) 8%, transparent);
+    color: var(--alinea-primary-subtle-fg);
+  }
+
+  &:active {
+    background-color: color-mix(in oklab, var(--alinea-fg) 14%, transparent);
+  }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+}

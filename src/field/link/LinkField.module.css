@@ -1,0 +1,81 @@
+.LinkFieldView-icon {
+  flex-shrink: 0;
+  color: var(--alinea-fg);
+  font-size: 16px;
+}
+
+.LinkFieldView-type {
+  flex: 0 1 auto;
+  max-width: 120px;
+}
+
+.LinkFieldView-previewImage,
+.LinkFieldView-previewImagePlaceholder {
+  align-self: center;
+  aspect-ratio: 1;
+  border-radius: 6px;
+  flex-shrink: 0;
+  height: 24px;
+  width: 24px;
+}
+
+.LinkFieldView-previewImage {
+  background: var(--alinea-bg-muted);
+  object-fit: contain;
+}
+
+.LinkFieldView-previewImagePlaceholder {
+  background: color-mix(in srgb, var(--alinea-fg-muted) 16%, transparent);
+  animation: LinkFieldView-skeleton-pulse 1100ms ease-in-out infinite;
+}
+
+.LinkFieldView-metaLabel {
+  max-width: 240px;
+}
+
+.LinkFieldView-anchorOption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.LinkFieldView-anchorOption-label {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.LinkFieldView-anchorOption-location {
+  font-size: 12px;
+  font-weight: 400;
+  opacity: 0.65;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.LinkFieldView-create {
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+  justify-content: center;
+  gap: 8px;
+}
+
+.LinkFieldView-createButton {
+  flex-shrink: 0;
+}
+
+@keyframes LinkFieldView-skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+
+  50% {
+    opacity: 0.9;
+  }
+}

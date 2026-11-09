@@ -1,0 +1,755 @@
+import {createCMS, Entry} from '#/core.js'
+import {ListRow} from '#/core/ListRow.js'
+import {MediaFile} from '#/core/media/MediaTypes.js'
+import {MemorySource} from '#/core/source/MemorySource.js'
+import {isRecord} from '#/core/util/Objects.js'
+import type {MetadataAlias} from '#/field/metadata/MetadataAliases.js'
+import {Config, Edit, Field} from '#/index.js'
+import {createEntrySource} from '#test/EntryFixture.js'
+import {suite} from '@alinea/suite'
+import {EntryStore} from './EntryStore.js'
+
+const test = suite(import.meta)
+
+const Page = Config.type('Page', {
+  fields: {
+    title: Field.text('Title'),
+    path: Field.path('Path')
+  }
+})
+
+const DocumentPage = Config.document('Document page', {
+  contains: ['DocumentPage'],
+  fields: {}
+})
+
+const cms = createCMS({
+  schema: {Page},
+  workspaces: {
+    main: Config.workspace('Main', {
+      source: 'content',
+      roots: {
+        pages: Config.root('Pages', {
+          contains: ['Page']
+        }),
+        docs: Config.root('Docs', {
+          contains: ['Page']
+        }),
+        media: Config.media({
+          contains: ['MediaFile']
+        })
+      }
+    })
+  }
+})
+
+const documentCms = createCMS({
+  schema: {DocumentPage},
+  workspaces: {
+    main: Config.workspace('Main', {
+      source: 'content',
+      roots: {
+        pages: Config.root('Pages', {
+          contains: ['DocumentPage']
+        })
+      }
+    })
+  }
+})
+
+function alias(url: string): MetadataAlias {
+  return {
+    [ListRow.id]: `alias-${url}`,
+    [ListRow.index]: 'a0',
+    [ListRow.type]: 'alias',
+    url
+  }
+}
+
+function metadata(urls: Array<string>) {
+  return {
+    title: '',
+    description: '',
+    aliases: urls.map(alias),
+    openGraph: {
+      image: null,
+      title: '',
+      description: ''
+    },
+    createdAt: null,
+    createdBy: {name: '', email: ''},
+    updatedAt: null,
+    updatedBy: {name: '', email: ''}
+  }
+}
+
+function pageData(title: string, path: string, urls: Array<string>) {
+  return {title, path, metadata: metadata(urls)}
+}
+
+function mediaFileData(title: string, path: string, aliases: Array<string>) {
+  return {
+    title,
+    path,
+    metadata: {
+      aliases: aliases.map(alias)
+    },
+    location: `/${path}.jpg`,
+    extension: '.jpg',
+    size: 1024,
+    hash: `${path}-hash`
+  }
+}
+
+test('create fills document metadata defaults around explicit values', async () => {
+  const db = await createDocumentDb()
+  const aliases = Edit.list(DocumentPage.metadata.aliases)
+    .add('alias', {url: '/previous'})
+    .value()
+  const entry = await db.create({
+    type: DocumentPage,
+    set: {
+      title: 'Document',
+      metadata: {aliases}
+    }
+  })
+
+  const {createdAt} = entry.metadata
+  test.ok(typeof createdAt === 'number')
+  test.equal(entry.metadata, {
+    title: '',
+    description: '',
+    aliases,
+    openGraph: {
+      image: null,
+      title: '',
+      description: ''
+    },
+    createdAt,
+    createdBy: {name: '', email: ''},
+    updatedAt: createdAt,
+    updatedBy: {name: '', email: ''}
+  })
+})
+
+async function createDb() {
+  const source = await createEntrySource(cms.config, [
+    {
+      id: 'one',
+      type: 'Page',
+      index: 'a1',
+      root: 'pages',
+      path: 'one',
+      data: {
+        title: 'One',
+        metadata: metadata(['/old-one'])
+      }
+    }
+  ])
+  const db = await EntryStore.memory(cms.config, source)
+  await db.sync()
+  return db
+}
+
+async function createEmptyDb() {
+  const db = await EntryStore.memory(cms.config, new MemorySource())
+  await db.sync()
+  return db
+}
+
+async function createDocumentDb() {
+  const db = await EntryStore.memory(documentCms.config, new MemorySource())
+  await db.sync()
+  return db
+}
+
+test('assigns distinct order indexes to entries created in one batch', async () => {
+  const db = await createEmptyDb()
+
+  await db.mutate([
+    {
+      op: 'create',
+      id: 'batch-entry-0',
+      type: 'Page',
+      locale: null,
+      root: 'pages',
+      data: {title: 'Entry 0'}
+    },
+    {
+      op: 'create',
+      id: 'batch-entry-1',
+      type: 'Page',
+      locale: null,
+      root: 'pages',
+      data: {title: 'Entry 1'}
+    }
+  ])
+
+  const first = await db.first({
+    id: 'batch-entry-0',
+    status: 'all',
+    select: {index: Entry.index}
+  })
+  const second = await db.first({
+    id: 'batch-entry-1',
+    status: 'all',
+    select: {index: Entry.index}
+  })
+  if (!first || !second) throw new Error('Expected both batch entries')
+  test.ok(first.index !== second.index)
+  test.ok(first.index < second.index)
+})
+
+test('create places entries first or last among their siblings', async () => {
+  const db = await createEmptyDb()
+  const create = (title: string, insertOrder?: 'first' | 'last') => ({
+    op: 'create' as const,
+    id: `order-${title}`,
+    type: 'Page',
+    locale: null,
+    root: 'pages',
+    insertOrder,
+    data: {title}
+  })
+  await db.mutate([create('b'), create('c')])
+  await db.mutate([create('a', 'first'), create('d', 'last')])
+  await db.mutate([create('0', 'first')])
+
+  const titles = await db.find({
+    root: 'pages',
+    status: 'all',
+    select: Entry.title
+  })
+  test.equal(titles, ['0', 'a', 'b', 'c', 'd'])
+})
+
+test('create suffixes a path taken by siblings at the same location', async () => {
+  const db = await createEmptyDb()
+  const create = (id: string, root: string, path: string) => ({
+    op: 'create' as const,
+    id,
+    type: 'Page',
+    locale: null,
+    root,
+    data: {title: id, path}
+  })
+  await db.mutate([
+    create('taken', 'pages', 'same'),
+    create('taken-1', 'pages', 'same-1'),
+    create('taken-2', 'pages', 'same-2'),
+    create('longer', 'pages', 'samesame'),
+    create('elsewhere', 'docs', 'same-3')
+  ])
+  await db.mutate([create('new', 'pages', 'same')])
+
+  const created = await db.first({
+    id: 'new',
+    status: 'all',
+    select: Entry.path
+  })
+  test.is(created, 'same-3')
+})
+
+test('resolves path collisions sequentially within one batch', async () => {
+  const db = await createEmptyDb()
+  await db.mutate([
+    {
+      op: 'create',
+      id: 'batch-path-0',
+      type: 'Page',
+      locale: null,
+      root: 'pages',
+      data: {title: 'Entry 0', path: 'first'}
+    },
+    {
+      op: 'create',
+      id: 'batch-path-1',
+      type: 'Page',
+      locale: null,
+      root: 'pages',
+      data: {title: 'Entry 1', path: 'second'}
+    }
+  ])
+
+  await db.mutate([
+    {
+      op: 'update',
+      id: 'batch-path-0',
+      locale: null,
+      status: 'published',
+      set: {path: 'same'}
+    },
+    {
+      op: 'update',
+      id: 'batch-path-1',
+      locale: null,
+      status: 'published',
+      set: {path: 'same'}
+    }
+  ])
+
+  const first = await db.first({
+    id: 'batch-path-0',
+    status: 'all',
+    select: {path: Entry.path}
+  })
+  const second = await db.first({
+    id: 'batch-path-1',
+    status: 'all',
+    select: {path: Entry.path}
+  })
+  test.is(first?.path, 'same')
+  test.is(second?.path, 'same-1')
+})
+
+function aliasUrls(value: unknown): Array<string> {
+  if (!Array.isArray(value)) return []
+  return value.flatMap(alias => {
+    if (!isRecord(alias)) return []
+    const url = alias.url
+    return typeof url === 'string' ? [url] : []
+  })
+}
+
+test('url aliases are never checked for uniqueness', async () => {
+  const db = await createDb()
+  const page = (
+    root: string,
+    status: 'draft' | 'published',
+    urls: Array<string>
+  ) => db.create({type: Page, root, status, set: pageData('Two', 'two', urls)})
+  const file = (path: string) =>
+    db.create({
+      type: MediaFile,
+      root: 'media',
+      status: 'published',
+      set: mediaFileData(path, path, ['/old-file'])
+    })
+  // Aliases of another entry, of its url, repeated and in another root
+  const draft = await page('pages', 'draft', ['/old-one', '/one', '/x', '/x'])
+  await db.publish({id: draft._id, status: 'draft'})
+  const docs = await page('docs', 'published', ['/old-one'])
+  const first = await file('one')
+  await file('two')
+  test.is(await db.first({url: '/one', select: Entry.id}), 'one')
+  const owner = (root: string, alias: string) =>
+    db.first({root, alias, select: Entry.id})
+  test.is(await owner('pages', '/old-one'), 'one')
+  test.is(await owner('docs', '/old-one'), docs._id)
+  test.is(await owner('media', '/old-file'), first._id)
+})
+
+test('blocks duplicate MediaFile URLs across media roots', async () => {
+  const mediaCms = createCMS({
+    schema: {},
+    workspaces: {
+      main: Config.workspace('Main', {
+        source: 'content',
+        roots: {
+          first: Config.media(),
+          second: Config.media()
+        }
+      })
+    }
+  })
+  const db = await EntryStore.memory(mediaCms.config, new MemorySource())
+  await db.sync()
+  await db.create({
+    type: MediaFile,
+    root: 'first',
+    set: mediaFileData('Image', 'image', [])
+  })
+
+  await test.throws(
+    () =>
+      db.create({
+        type: MediaFile,
+        root: 'second',
+        set: mediaFileData('Image', 'image', [])
+      }),
+    'URL "/admin/file/image.jpg" is already defined'
+  )
+})
+
+test('mediaUrl prefixes disambiguate duplicate MediaFile URLs', async () => {
+  const mediaCms = createCMS({
+    schema: {},
+    workspaces: {
+      main: Config.workspace('Main', {
+        source: 'content/main',
+        mediaUrl: 'company-a',
+        roots: {
+          media: Config.media()
+        }
+      }),
+      secondary: Config.workspace('Secondary', {
+        source: 'content/secondary',
+        mediaUrl: 'company-b',
+        roots: {
+          media: Config.media()
+        }
+      })
+    }
+  })
+  const db = await EntryStore.memory(mediaCms.config, new MemorySource())
+  await db.sync()
+  await db.create({
+    type: MediaFile,
+    workspace: 'main',
+    set: mediaFileData('Image', 'image', [])
+  })
+
+  const secondary = await db.create({
+    type: MediaFile,
+    workspace: 'secondary',
+    set: mediaFileData('Image', 'image', [])
+  })
+
+  test.is(secondary._url, '/admin/file/company-b/image.jpg')
+})
+
+const renamed = [
+  {
+    open: createDocumentDb,
+    type: 'DocumentPage',
+    root: 'pages',
+    data: (path: string) => ({title: 'One', path}),
+    url: (path: string) => `/${path}`
+  },
+  {
+    open: createEmptyDb,
+    type: 'MediaFile',
+    root: 'media',
+    data: (path: string) => mediaFileData('One', path, []),
+    url: (path: string) => `/admin/file/${path}.jpg`
+  }
+]
+
+test('update and publish keep the previous url as an alias', async () => {
+  for (const {open, type, root, data, url} of renamed)
+    for (const via of ['update', 'publish'] as const) {
+      const db = await open()
+      const create = (path: string, status: 'draft' | 'published') =>
+        db.mutate([
+          {
+            op: 'create',
+            id: 'entry',
+            type,
+            locale: null,
+            root,
+            status,
+            overwrite: true,
+            data: data(path)
+          }
+        ])
+      await create('one', 'published')
+      if (via === 'update')
+        await db.mutate([
+          {
+            op: 'update',
+            id: 'entry',
+            locale: null,
+            status: 'published',
+            set: {path: 'two'}
+          }
+        ])
+      else {
+        await create('two', 'draft')
+        await db.mutate([
+          {op: 'publish', id: 'entry', locale: null, status: 'draft'}
+        ])
+      }
+      const result = await db.get({
+        id: 'entry',
+        select: {url: Entry.url, aliases: Entry.aliases}
+      })
+      test.equal(
+        {type, via, url: result.url, aliases: aliasUrls(result.aliases)},
+        {type, via, url: url('two'), aliases: [url('one')]}
+      )
+    }
+})
+
+test('update does not add a MediaFile alias when its public URL is unchanged', async () => {
+  const db = await createEmptyDb()
+  const entry = await db.create({
+    type: MediaFile,
+    root: 'media',
+    status: 'published',
+    set: mediaFileData('One', 'one', [])
+  })
+
+  await db.update({
+    type: MediaFile,
+    id: entry._id,
+    status: 'published',
+    set: {location: '/replacement.jpg'}
+  })
+
+  // Files leave empty aliases out
+  const aliases = await db.first({
+    id: entry._id,
+    select: Entry.aliases
+  })
+  test.equal(aliasUrls(aliases), [])
+})
+
+test('update preserves a MediaFile URL with an empty alias row', async () => {
+  const db = await createEmptyDb()
+  const emptyAlias = {
+    ...alias(''),
+    [ListRow.index]: ''
+  }
+  const data = mediaFileData('One', 'one', [])
+  const entry = await db.create({
+    type: MediaFile,
+    root: 'media',
+    status: 'published',
+    set: {
+      ...data,
+      metadata: {
+        ...data.metadata,
+        aliases: [emptyAlias]
+      }
+    }
+  })
+
+  await db.update({
+    type: MediaFile,
+    id: entry._id,
+    status: 'published',
+    set: {path: 'two'}
+  })
+
+  const aliases = await db.get({
+    id: entry._id,
+    select: Entry.aliases
+  })
+  test.equal(aliasUrls(aliases), ['', '/admin/file/one.jpg'])
+})
+
+test('update removes a current MediaFile URL from legacy aliases', async () => {
+  const source = await createEntrySource(cms.config, [
+    {
+      id: 'media-one',
+      type: 'MediaFile',
+      index: 'a1',
+      root: 'media',
+      path: 'one',
+      data: {
+        ...mediaFileData('One', 'one', []),
+        aliases: [alias('/admin/file/two.jpg')]
+      }
+    }
+  ])
+  const db = await EntryStore.memory(cms.config, source)
+  await db.sync()
+
+  await db.update({
+    type: MediaFile,
+    id: 'media-one',
+    status: 'published',
+    set: {path: 'two'}
+  })
+
+  const aliases = await db.get({
+    id: 'media-one',
+    select: Entry.aliases
+  })
+  test.equal(aliasUrls(aliases), ['/admin/file/one.jpg'])
+})
+
+test('move preserves previous URLs for moved entries and children', async () => {
+  const db = await createDocumentDb()
+  const parent = await db.create({
+    type: DocumentPage,
+    root: 'pages',
+    status: 'published',
+    set: {title: 'Parent', path: 'parent'}
+  })
+  const target = await db.create({
+    type: DocumentPage,
+    root: 'pages',
+    status: 'published',
+    set: {title: 'Target', path: 'target'}
+  })
+  const child = await db.create({
+    type: DocumentPage,
+    root: 'pages',
+    parentId: parent._id,
+    status: 'published',
+    set: {title: 'Child', path: 'child'}
+  })
+
+  await db.move({
+    id: parent._id,
+    target: target._id,
+    dropPosition: 'on'
+  })
+
+  const movedParent = await db.get({
+    id: parent._id,
+    select: {
+      url: Entry.url,
+      aliases: Entry.aliases
+    }
+  })
+  const movedChild = await db.get({
+    id: child._id,
+    select: {
+      url: Entry.url,
+      aliases: Entry.aliases
+    }
+  })
+  test.is(movedParent.url, '/target/parent')
+  test.equal(aliasUrls(movedParent.aliases), ['/parent'])
+  test.is(movedChild.url, '/target/parent/child')
+  test.equal(aliasUrls(movedChild.aliases), ['/parent/child'])
+})
+
+test('does not add URL aliases for types without metadata aliases', async () => {
+  const db = await createEmptyDb()
+  const entry = await db.create({
+    type: Page,
+    root: 'pages',
+    status: 'published',
+    set: {title: 'One', path: 'one'}
+  })
+
+  await db.update({
+    type: Page,
+    id: entry._id,
+    status: 'published',
+    set: {path: 'two'}
+  })
+
+  const aliases = await db.first({
+    id: entry._id,
+    select: Entry.aliases
+  })
+  test.is(aliases, undefined)
+})
+
+const localizedCms = createCMS({
+  schema: {Page},
+  workspaces: {
+    main: Config.workspace('Main', {
+      source: 'content/main',
+      roots: {
+        pages: Config.root('Pages', {contains: ['Page']})
+      }
+    }),
+    international: Config.workspace('International', {
+      source: 'content/international',
+      roots: {
+        articles: Config.root('Articles', {
+          contains: ['Page'],
+          i18n: {locales: ['en', 'nl']}
+        })
+      }
+    })
+  }
+})
+
+test('creates a translation in the root of its other locales', async () => {
+  const db = await EntryStore.memory(localizedCms.config, new MemorySource())
+  await db.sync()
+  await db.mutate([
+    {
+      op: 'create',
+      id: 'article',
+      type: 'Page',
+      locale: 'en',
+      workspace: 'international',
+      root: 'articles',
+      data: {title: 'Article'}
+    }
+  ])
+  // Saving a translation from the dashboard only passes id and locale
+  await db.mutate([
+    {
+      op: 'create',
+      id: 'article',
+      type: 'Page',
+      locale: 'nl',
+      data: {title: 'Artikel'}
+    }
+  ])
+  const translation = await db.first({
+    id: 'article',
+    locale: 'nl',
+    status: 'all',
+    select: {workspace: Entry.workspace, root: Entry.root}
+  })
+  test.equal(translation, {workspace: 'international', root: 'articles'})
+})
+
+async function createRedirectDb() {
+  const db = await createDocumentDb()
+  for (const [id, title] of [
+    ['one', 'One'],
+    ['two', 'Two']
+  ])
+    await db.create({
+      type: DocumentPage,
+      id,
+      root: 'pages',
+      status: 'published',
+      set: {title, path: id}
+    })
+  const metadata = await db.get({id: 'two', select: Entry.data})
+  const redirect = (url: string) => ({
+    op: 'update' as const,
+    id: 'two',
+    locale: null,
+    status: 'published' as const,
+    set: {
+      metadata: {
+        ...metadata.metadata,
+        aliases: Edit.list(DocumentPage.metadata.aliases)
+          .add('alias', {url})
+          .value()
+      }
+    }
+  })
+  return {db, redirect}
+}
+
+test('an alias takes the url of an entry archived in the same commit', async () => {
+  const {db, redirect} = await createRedirectDb()
+  await db.mutate([{op: 'archive', id: 'one', locale: null}, redirect('/one')])
+  test.is(await db.first({alias: '/one', select: Entry.id}), 'two')
+  test.is(await db.first({url: '/one', select: Entry.id}), null)
+  // The archived entry still gets its url back when it is published again
+  await db.publish({id: 'one', locale: null, status: 'archived'})
+  const restored = await db.first({url: '/one', select: Entry.id})
+  test.is(restored, 'one')
+  test.is(await db.first({alias: '/one', select: Entry.id}), 'two')
+})
+
+test('an alias takes the url of an entry deleted in the same commit', async () => {
+  const {db, redirect} = await createRedirectDb()
+  await db.mutate([{op: 'remove', id: 'one', locale: null}, redirect('/one')])
+  test.is(await db.first({id: 'one', status: 'all'}), null)
+  test.is(await db.first({alias: '/one', select: Entry.id}), 'two')
+})
+
+test('a redirect that fails leaves the archived entry in place', async () => {
+  const {db, redirect} = await createRedirectDb()
+  let error: unknown
+  try {
+    await db.mutate([
+      {op: 'archive', id: 'one', locale: null},
+      {...redirect('/one'), id: 'missing'}
+    ])
+  } catch (cause) {
+    error = cause
+  }
+  test.is((error as Error)?.message, 'Entry not found: missing')
+  const status = await db.first({
+    id: 'one',
+    status: 'all',
+    select: Entry.status
+  })
+  test.is(status, 'published')
+})
