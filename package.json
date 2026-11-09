@@ -98,7 +98,7 @@
   },
   "dependencies": {
     "@alinea/iso": "^0.3.3",
-    "@alinea/sqlite-wasm": "0.8.1",
+    "@alinea/sqlite-wasm": "0.8.2",
     "esbuild": "^0.28.0"
   },
   "peerDependencies": {
@@ -108,7 +108,7 @@
   "devDependencies": {
     "@alinea/styler": "^1.0.3",
     "@alinea/suite": "^0.6.3",
-    "@badgateway/oauth2-client": "^3.2.0",
+    "@badgateway/oauth2-client": "^3.3.1",
     "@esbx/reporter": "^0.0.20",
     "@esbx/workspaces": "^0.0.20",
     "@floating-ui/dom": "^1.8.0",
